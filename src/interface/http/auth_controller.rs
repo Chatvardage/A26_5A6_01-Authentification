@@ -1,0 +1,48 @@
+//! Contrôleurs HTTP pour `/api/auth/*`. Chaque handler reste court :
+//! il extrait le JSON, délègue à `AuthService`, et laisse `AppError`
+//! (voir error.rs) gérer la mise en forme des erreurs.
+
+use axum::{extract::State, Json};
+
+use crate::application::dto::{AuthResponse, ConnexionRequest, InscriptionRequest};
+use crate::domain::ports::UtilisateurRepositoryPort; // requis pour appeler les méthodes du trait sur state.depot_utilisateurs
+use crate::domain::utilisateur::UtilisateurPublic;
+use crate::error::AppError;
+use crate::state::AppState;
+
+use super::middleware::UtilisateurAuthentifie;
+
+/// POST /api/auth/register
+pub async fn register(
+    State(state): State<AppState>,
+    Json(requete): Json<InscriptionRequest>,
+) -> Result<Json<AuthResponse>, AppError> {
+    let reponse = state.auth_service.inscrire(requete).await?;
+    Ok(Json(reponse))
+}
+
+/// POST /api/auth/login
+pub async fn login(
+    State(state): State<AppState>,
+    Json(requete): Json<ConnexionRequest>,
+) -> Result<Json<AuthResponse>, AppError> {
+    let reponse = state.auth_service.connecter(requete).await?;
+    Ok(Json(reponse))
+}
+
+/// GET /api/auth/me — retourne l'utilisateur courant à partir du jeton.
+/// Utile pour le desktop : au démarrage, valider un jeton déjà stocké
+/// localement sans redemander le mot de passe.
+pub async fn me(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+) -> Result<Json<UtilisateurPublic>, AppError> {
+    let utilisateur = state
+        .depot_utilisateurs
+        .trouver_par_id(session.id_utilisateur)
+        .await
+        .map_err(|e| AppError::Interne(e.to_string()))?
+        .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+    Ok(Json(UtilisateurPublic::from(utilisateur)))
+}

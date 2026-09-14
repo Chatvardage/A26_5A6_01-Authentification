@@ -1,0 +1,74 @@
+[package]
+name = "chatvardage-auth"
+version = "0.1.0"
+edition = "2021"
+
+# --- Dépendances -------------------------------------------------------
+# Chaque groupe est commenté pour expliquer POURQUOI la crate est là :
+# utile quand on n'a jamais touché à Rust et qu'on relit ce fichier plus
+# tard pour comprendre le projet.
+
+[dependencies]
+# Framework web asynchrone. Choisi parce qu'il est simple à apprendre,
+# très utilisé en 2026, et basé sur tower (middlewares réutilisables).
+# Le support JSON (extracteur `Json<T>`) est activé par défaut.
+axum = "0.7"
+# Extracteurs additionnels (ex. TypedHeader pour lire proprement le
+# header "Authorization: Bearer ...").
+axum-extra = { version = "0.9", features = ["typed-header"] }
+
+# Runtime asynchrone requis par axum et sqlx (Rust n'a pas d'async
+# runtime intégré au langage, contrairement à Node ou Go).
+tokio = { version = "1", features = ["full"] }
+
+# Client PostgreSQL asynchrone. On utilise l'API "query builder" à
+# l'exécution (pas les macros query! qui exigent une DB disponible au
+# moment de la compilation) pour rester simple au départ.
+sqlx = { version = "0.7", features = [
+    "runtime-tokio-rustls",
+    "postgres",
+    "uuid",
+    "chrono",
+] }
+
+# Permet d'écrire des traits avec des méthodes `async fn` utilisables en
+# "trait object" (`Arc<dyn UtilisateurRepositoryPort>`) — nécessaire pour
+# pouvoir basculer entre PgUtilisateurRepository et MockUtilisateurRepository
+# au démarrage (voir domain::ports et main.rs). Rust ne supporte pas encore
+# nativement l'async dans les traits utilisés ainsi (dispatch dynamique).
+async-trait = "0.1"
+
+# Sérialisation JSON des requêtes/réponses HTTP.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Identifiants uniques (UUID) pour les utilisateurs.
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Horodatages (cree_le, modifie_le, expiration des jetons).
+chrono = { version = "0.4", features = ["serde"] }
+
+# Hachage de mots de passe. Argon2 est l'algorithme recommandé
+# actuellement (plus robuste que bcrypt/md5 face aux attaques GPU).
+argon2 = "0.5"
+
+# Génération/validation des JSON Web Tokens (JWT) pour l'authentification.
+jsonwebtoken = "9"
+
+# Lecture du fichier .env en local (en prod/Docker, les variables
+# d'environnement sont fournies directement par docker-compose).
+dotenvy = "0.15"
+
+# Middlewares HTTP génériques (CORS, logs des requêtes, timeout).
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Journalisation structurée (remplace les println! de debug).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Erreurs applicatives ergonomiques (équivalent de "custom Error classes").
+thiserror = "1"
+
+# Validation simple des entrées (format courriel, longueur mot de passe...).
+validator = { version = "0.18", features = ["derive"] }

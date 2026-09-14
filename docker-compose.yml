@@ -1,0 +1,36 @@
+# docker-compose.yml DE CE DÉPÔT = pour développer et démontrer le
+# service d'authentification SEUL, en isolation. Le dépôt "infra" de
+# l'équipe aura son propre docker-compose.yml qui assemble ce service
+# (comme image Docker) avec les autres services (salons, messages, etc.),
+# un Redis partagé et une vraie base PostgreSQL — ce fichier-ci n'a pas
+# besoin de connaître les autres services.
+#
+# Pourquoi pas de PostgreSQL ici ? Un autre service de l'équipe gère les
+# migrations (la création de la table `users`) — ce n'est plus la
+# responsabilité de ce dépôt. Pour pouvoir développer et tester sans
+# dépendre de ce service, ce compose lance l'API en "mode mock"
+# (USE_MOCK_DB=true, voir README section "Mode mock") : les comptes
+# vivent en mémoire, rien n'est persisté. Une fois la vraie base prête
+# (schéma créé par l'autre service), remplacer USE_MOCK_DB par "false" et
+# ajouter DATABASE_URL pointant vers cette base (la vôtre en local, ou
+# celle du dépôt infra) pour tester avec PostgreSQL.
+#
+# Utilisation :
+#   docker compose up --build
+#   -> API disponible sur http://localhost:3001
+#   -> curl http://localhost:3001/health
+
+services:
+  auth-api:
+    build: .
+    container_name: chatvardage-auth-api
+    ports:
+      - "3001:3001"
+    environment:
+      USE_MOCK_DB: "true"
+      # DATABASE_URL: postgres://chatvardage:chatvardage@auth-db:5432/chatvardage_auth
+      JWT_SECRET: dev-secret-ne-pas-utiliser-en-production
+      JWT_DUREE_DE_VIE_HEURES: "24"
+      PORT: "3001"
+      RUST_LOG: info
+    restart: unless-stopped

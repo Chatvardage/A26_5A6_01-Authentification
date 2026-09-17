@@ -161,6 +161,10 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             u.clone()
         }))
     }
+
+    async fn verifier_sante(&self) -> Result<(), RepoError> {
+        self.verifier_erreur_provoquee()
+    }
 }
 
 #[cfg(test)]
@@ -258,9 +262,14 @@ mod tests {
             repo.changer_role(Uuid::new_v4(), Role::Admin).await,
             Err(RepoError::Interne(_))
         ));
+        assert!(matches!(
+            repo.verifier_sante().await,
+            Err(RepoError::Interne(_))
+        ));
 
         repo.provoquer_erreur_interne(false);
         assert!(repo.lister().await.is_ok());
+        assert!(repo.verifier_sante().await.is_ok());
     }
 
     #[tokio::test]

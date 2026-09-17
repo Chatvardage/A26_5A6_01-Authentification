@@ -142,6 +142,14 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         .await
         .map_err(mapper_erreur_sql)
     }
+
+    async fn verifier_sante(&self) -> Result<(), RepoError> {
+        sqlx::query("SELECT 1")
+            .execute(&self.pool)
+            .await
+            .map_err(mapper_erreur_sql)?;
+        Ok(())
+    }
 }
 
 /// Traduit une erreur SQL "brute" (ex. contrainte UNIQUE violée) en
@@ -390,5 +398,23 @@ mod tests {
 
         let resultat = repo.trouver_par_id(Uuid::new_v4()).await;
         assert!(matches!(resultat, Err(RepoError::Interne(_))));
+    }
+
+    #[tokio::test]
+    async fn verifier_sante_reussit_avec_une_vraie_connexion() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        assert!(repo.verifier_sante().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn verifier_sante_echoue_si_le_pool_est_ferme() {
+        let pool = pool_de_test().await;
+        let repo = PgUtilisateurRepository::new(pool.clone());
+        pool.close().await;
+
+        assert!(matches!(
+            repo.verifier_sante().await,
+            Err(RepoError::Interne(_))
+        ));
     }
 }

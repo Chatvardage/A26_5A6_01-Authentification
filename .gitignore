@@ -3,6 +3,12 @@
 *.pdb
 node_modules/
 
+# Backups générés par rustfmt
+**/*.rs.bk
+
+# Données générées par cargo-mutants (mutation testing), si utilisé un jour
+**/mutants.out*/
+
 # Cache sqlx hors-ligne (si vous migrez un jour vers les macros query!)
 .sqlx/
 .idea/

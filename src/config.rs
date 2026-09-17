@@ -13,6 +13,18 @@
 /// empêche déjà le démarrage en échouant la connexion PostgreSQL).
 const LONGUEUR_MIN_JWT_SECRET: usize = 16;
 
+/// Bornes acceptées pour `JWT_DUREE_DE_VIE_HEURES`. `JwtService::generer_token`
+/// (`infrastructure/jwt.rs`) calcule l'expiration via
+/// `Duration::hours(n).checked_add_signed(...)`, protégé par un simple
+/// `.expect(...)` (pas une `AppError`) car cette valeur est censée être
+/// une constante de configuration validée au démarrage, pas une entrée
+/// utilisateur — sans ces bornes, une valeur aberrante dans `.env` (une
+/// faute de frappe avec trop de chiffres, par exemple) ferait paniquer
+/// `Duration::hours` à *chaque* tentative de connexion/inscription (pas
+/// seulement au démarrage) au lieu d'échouer une fois, clairement, ici.
+const JWT_DUREE_MIN_HEURES: i64 = 1;
+const JWT_DUREE_MAX_HEURES: i64 = 8760; // 1 an
+
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
@@ -51,18 +63,19 @@ impl Config {
              — un secret vide ou trop court rendrait tous les jetons falsifiables"
         );
 
+        let jwt_duree_de_vie_heures = lire_var_numerique("JWT_DUREE_DE_VIE_HEURES", 24i64);
+        assert!(
+            (JWT_DUREE_MIN_HEURES..=JWT_DUREE_MAX_HEURES).contains(&jwt_duree_de_vie_heures),
+            "JWT_DUREE_DE_VIE_HEURES doit être comprise entre {JWT_DUREE_MIN_HEURES} et {JWT_DUREE_MAX_HEURES} \
+             heures (voir .env.example), reçu {jwt_duree_de_vie_heures}"
+        );
+
         Self {
             database_url: std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL doit être définie (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock"),
             jwt_secret,
-            jwt_duree_de_vie_heures: std::env::var("JWT_DUREE_DE_VIE_HEURES")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(24),
-            port: std::env::var("PORT")
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(3001),
+            jwt_duree_de_vie_heures,
+            port: lire_var_numerique("PORT", 3001u16),
             cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS").ok().map(|v| {
                 v.split(',')
                     .map(|origine| origine.trim().to_string())
@@ -71,6 +84,27 @@ impl Config {
             }),
         }
     }
+}
+
+/// Lit une variable d'environnement numérique optionnelle. Contrairement
+/// à `DATABASE_URL`/`JWT_SECRET` (obligatoires, le démarrage échoue si
+/// elles manquent ou sont invalides), une valeur *présente mais
+/// mal formée* ici (ex. `PORT=abcd`, une faute de frappe) retombe sur
+/// `defaut` plutôt que de bloquer le démarrage — mais pas silencieusement :
+/// un avertissement est journalisé pour que l'erreur ne passe pas
+/// inaperçue.
+fn lire_var_numerique<T: std::str::FromStr>(nom: &str, defaut: T) -> T {
+    let Some(valeur) = std::env::var(nom).ok().filter(|v| !v.is_empty()) else {
+        return defaut;
+    };
+    valeur.parse().unwrap_or_else(|_| {
+        tracing::warn!(
+            variable = nom,
+            valeur,
+            "valeur invalide, valeur par défaut utilisée"
+        );
+        defaut
+    })
 }
 
 #[cfg(test)]
@@ -164,6 +198,68 @@ mod tests {
                 let config = Config::depuis_variables_environnement();
                 assert_eq!(config.jwt_duree_de_vie_heures, 48);
                 assert_eq!(config.port, 4000);
+            },
+        );
+    }
+
+    #[test]
+    fn port_invalide_retombe_sur_le_defaut_sans_paniquer() {
+        avec_env(
+            &[
+                ("DATABASE_URL", Some("postgres://x/y")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+                ("PORT", Some("abcd")),
+            ],
+            || {
+                let config = Config::depuis_variables_environnement();
+                assert_eq!(config.port, 3001);
+            },
+        );
+    }
+
+    #[test]
+    fn jwt_duree_de_vie_heures_invalide_retombe_sur_le_defaut_sans_paniquer() {
+        avec_env(
+            &[
+                ("DATABASE_URL", Some("postgres://x/y")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+                ("JWT_DUREE_DE_VIE_HEURES", Some("pas-un-nombre")),
+            ],
+            || {
+                let config = Config::depuis_variables_environnement();
+                assert_eq!(config.jwt_duree_de_vie_heures, 24);
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "JWT_DUREE_DE_VIE_HEURES doit être comprise entre")]
+    fn panique_si_jwt_duree_de_vie_heures_trop_grande() {
+        avec_env(
+            &[
+                ("DATABASE_URL", Some("postgres://x/y")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+                // Assez grand pour dépasser JWT_DUREE_MAX_HEURES, mais un
+                // i64 tout à fait valide (pas de simple échec de parsing).
+                ("JWT_DUREE_DE_VIE_HEURES", Some("100000000")),
+            ],
+            || {
+                let _ = Config::depuis_variables_environnement();
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "JWT_DUREE_DE_VIE_HEURES doit être comprise entre")]
+    fn panique_si_jwt_duree_de_vie_heures_nulle_ou_negative() {
+        avec_env(
+            &[
+                ("DATABASE_URL", Some("postgres://x/y")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+                ("JWT_DUREE_DE_VIE_HEURES", Some("0")),
+            ],
+            || {
+                let _ = Config::depuis_variables_environnement();
             },
         );
     }

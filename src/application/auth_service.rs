@@ -114,6 +114,33 @@ impl AuthService {
             ));
         }
 
+        // Changer le courriel ou le mot de passe exige de reconfirmer le
+        // mot de passe actuel : un jeton volé/intercepté ne doit pas
+        // suffire à prendre le contrôle permanent du compte (voir doc de
+        // `ModifierProfilRequest::mot_de_passe_actuel`). Un changement de
+        // pseudo seul n'a pas besoin de cette confirmation.
+        if requete.courriel.is_some() || requete.mot_de_passe.is_some() {
+            let mot_de_passe_actuel = requete.mot_de_passe_actuel.as_deref().ok_or_else(|| {
+                AppError::Requete(
+                    "le mot de passe actuel est requis pour changer le courriel ou le mot de passe"
+                        .into(),
+                )
+            })?;
+
+            let utilisateur_actuel = self
+                .depot
+                .trouver_par_id(id)
+                .await
+                .map_err(|e| AppError::Interne(e.to_string()))?
+                .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+            if !verifier_mot_de_passe(mot_de_passe_actuel, &utilisateur_actuel.mot_de_passe_hache) {
+                return Err(AppError::NonAutorise(
+                    "mot de passe actuel incorrect".into(),
+                ));
+            }
+        }
+
         let hache_mot_de_passe = requete
             .mot_de_passe
             .as_deref()

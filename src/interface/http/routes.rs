@@ -4,7 +4,8 @@
 //! des requêtes/réponses).
 
 use axum::{
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
     routing::{get, patch, post},
     Router,
 };
@@ -78,9 +79,23 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
 
 /// GET /health — utilisé par le `HEALTHCHECK` du Dockerfile et par
 /// docker-compose pour savoir si le service est prêt (voir consigne :
-/// "Vérifier la santé de la base de données et de Redis").
-async fn sante() -> &'static str {
-    "ok"
+/// "Vérifier la santé de la base de données et de Redis"). Interroge
+/// réellement PostgreSQL via `verifier_sante` (`SELECT 1`) plutôt que de
+/// répondre `ok` inconditionnellement : sans ça, ce endpoint confirmerait
+/// seulement que le processus HTTP tourne, pas que sa dépendance
+/// critique (la base) est joignable — ce que le `HEALTHCHECK` Docker et
+/// le `depends_on: condition: service_healthy` d'`infra` supposent.
+async fn sante(State(state): State<AppState>) -> (StatusCode, &'static str) {
+    match state.depot_utilisateurs.verifier_sante().await {
+        Ok(()) => (StatusCode::OK, "ok"),
+        Err(e) => {
+            tracing::error!(erreur = %e, "healthcheck: base de données inaccessible");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "base de données inaccessible",
+            )
+        }
+    }
 }
 
 /// Tests de bout en bout : chaque test construit sa propre application
@@ -264,6 +279,24 @@ mod tests {
         assert_eq!(reponse.status(), StatusCode::OK);
         let octets = reponse.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&octets[..], b"ok");
+    }
+
+    #[tokio::test]
+    async fn sante_signale_une_base_de_donnees_inaccessible() {
+        let ctx = nouveau_contexte();
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let reponse = ctx
+            .app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reponse.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -624,7 +657,9 @@ mod tests {
             "PATCH",
             "/api/auth/me",
             Some(&jeton),
-            Some(json!({ "courriel": "alice2@example.com" })),
+            Some(
+                json!({ "courriel": "alice2@example.com", "mot_de_passe_actuel": "motdepasse123" }),
+            ),
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
@@ -635,7 +670,9 @@ mod tests {
             "PATCH",
             "/api/auth/me",
             Some(&jeton),
-            Some(json!({ "mot_de_passe": "nouveau-mot-de-passe" })),
+            Some(
+                json!({ "mot_de_passe": "nouveau-mot-de-passe", "mot_de_passe_actuel": "motdepasse123" }),
+            ),
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
@@ -650,6 +687,122 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_courriel_sans_mot_de_passe_actuel_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "courriel": "alice2@example.com" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert!(corps["erreur"]
+            .as_str()
+            .unwrap()
+            .contains("mot de passe actuel"));
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_mot_de_passe_sans_mot_de_passe_actuel_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe": "nouveau-mot-de-passe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_avec_mauvais_mot_de_passe_actuel_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({
+                "courriel": "alice2@example.com",
+                "mot_de_passe_actuel": "mauvais-mot-de-passe",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_verification_mot_de_passe_actuel_avec_erreur_de_stockage_retourne_500() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({
+                "courriel": "alice2@example.com",
+                "mot_de_passe_actuel": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_courriel_apres_suppression_est_introuvable() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+
+        // Le jeton reste cryptographiquement valide (voir limites connues
+        // du README) : c'est la vérification du mot de passe actuel, qui
+        // doit d'abord relire le compte, qui échoue ici — pas le
+        // `depot.modifier` final (jamais atteint).
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({
+                "courriel": "alice2@example.com",
+                "mot_de_passe_actuel": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_pseudo_seul_ne_requiert_pas_le_mot_de_passe_actuel() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["pseudo"], "alice2");
     }
 
     #[tokio::test]

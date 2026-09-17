@@ -55,6 +55,15 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError>;
 
     async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError>;
+
+    /// Confirme que le stockage sous-jacent répond réellement (ex. `SELECT
+    /// 1` pour `PgUtilisateurRepository`) — utilisé par `GET /health`
+    /// (voir `interface::http::routes`), lui-même lu par le `HEALTHCHECK`
+    /// du `Dockerfile` et le `depends_on: condition: service_healthy`
+    /// d'`infra`. Sans cette vérification, `/health` ne ferait que
+    /// confirmer que le processus HTTP tourne, pas que sa dépendance
+    /// critique (la base de données) est joignable.
+    async fn verifier_sante(&self) -> Result<(), RepoError>;
 }
 
 /// Erreur générique de stockage, indépendante de PostgreSQL : ni

@@ -189,13 +189,20 @@ mettre à jour son profil sans passer par un admin. Ne permet pas de
 changer son propre rôle (voir `PATCH /api/users/{id}/role`, réservé aux
 admins).
 
+⚠️ **`mot_de_passe_actuel` est requis dès que `courriel` et/ou
+`mot_de_passe` sont fournis** (pas pour un changement de `pseudo` seul) :
+sans cette confirmation, un jeton volé suffirait à changer le mot de
+passe ou le courriel du compte et à en prendre le contrôle de façon
+permanente, bien après l'expiration normale du jeton.
+
 **Corps de la requête** (tous les champs optionnels, au moins un requis)
 
 ```json
 {
   "pseudo": "alice2",
   "courriel": "alice2@example.com",
-  "mot_de_passe": "nouveaumotdepasse123"
+  "mot_de_passe": "nouveaumotdepasse123",
+  "mot_de_passe_actuel": "motdepasse123"
 }
 ```
 
@@ -204,10 +211,11 @@ admins).
 | pseudo | optionnel, 3 à 20 caractères si fourni, ne peut pas contenir `@` |
 | courriel | optionnel, format courriel valide et 254 caractères maximum si fourni ; normalisé en minuscules |
 | mot_de_passe | optionnel, 8 à 128 caractères si fourni (rehaché avec Argon2) |
+| mot_de_passe_actuel | requis si `courriel` et/ou `mot_de_passe` sont fournis (ignoré sinon), 1 à 128 caractères |
 
 **Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
 
-**Erreurs** : `400` (validation, ou aucun champ fourni), `401` (jeton manquant/invalide), `404` (compte déjà supprimé), `409` (pseudo ou courriel déjà pris par un autre compte).
+**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant/invalide, ou `mot_de_passe_actuel` incorrect), `404` (compte déjà supprimé), `409` (pseudo ou courriel déjà pris par un autre compte).
 
 ---
 

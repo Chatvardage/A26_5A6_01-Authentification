@@ -54,10 +54,27 @@ pub struct InscriptionRequest {
 
 #[derive(Debug, Deserialize, Validate)]
 pub struct ConnexionRequest {
-    /// Accepte un courriel OU un pseudo, comme demandé dans l'énoncé.
-    #[validate(length(min = 1, message = "identifiant requis"))]
+    /// Accepte un courriel OU un pseudo, comme demandé dans l'énoncé —
+    /// plafonné à la même longueur que `courriel` (254, le plus grand des
+    /// deux formats possibles) : sans borne, cette route non authentifiée
+    /// accepterait un identifiant arbitrairement volumineux.
+    #[validate(length(
+        min = 1,
+        max = "LONGUEUR_MAX_COURRIEL",
+        message = "identifiant requis (254 caractères maximum)"
+    ))]
     pub identifiant: String,
-    #[validate(length(min = 1, message = "mot de passe requis"))]
+    /// Plafonné comme `InscriptionRequest::mot_de_passe` : `connecter`
+    /// (voir `AuthService`) appelle Argon2 sur ce champ à *chaque*
+    /// tentative de connexion, y compris pour un identifiant inconnu
+    /// (hachage factice) — sans borne, `/login`, route non authentifiée,
+    /// serait un vecteur de déni de service encore plus direct que
+    /// `/register`.
+    #[validate(length(
+        min = 1,
+        max = "LONGUEUR_MAX_MOT_DE_PASSE",
+        message = "mot de passe requis (128 caractères maximum)"
+    ))]
     pub mot_de_passe: String,
 }
 
@@ -104,6 +121,21 @@ pub struct ModifierProfilRequest {
         message = "le mot de passe doit contenir entre 8 et 128 caractères"
     ))]
     pub mot_de_passe: Option<String>,
+    /// Requis (vérifié dans `AuthService::modifier_profil`, pas
+    /// exprimable avec `validator` seul) dès que `courriel` et/ou
+    /// `mot_de_passe` sont modifiés — jamais pour un changement de
+    /// `pseudo` seul. Empêche qu'un jeton volé/intercepté (fenêtre
+    /// d'exploitation limitée à son expiration) ne se transforme en
+    /// prise de contrôle permanente du compte (changement du mot de
+    /// passe ou du courriel sans reconfirmer le mot de passe actuel) —
+    /// pratique recommandée par l'OWASP pour les actions sensibles sur
+    /// un compte.
+    #[validate(length(
+        min = 1,
+        max = "LONGUEUR_MAX_MOT_DE_PASSE",
+        message = "mot de passe actuel requis pour changer le courriel ou le mot de passe"
+    ))]
+    pub mot_de_passe_actuel: Option<String>,
 }
 
 /// `PATCH /api/users/{id}` (admin) : modification du pseudo/courriel

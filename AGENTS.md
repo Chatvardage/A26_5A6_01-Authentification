@@ -2,6 +2,13 @@
 
 Ce fichier contient les règles de travail pour tout agent IA ou développeur qui modifie ce dépôt.
 
+## Instructions importantes
+
+- Ne crée pas de commits
+- Fait seulement des modifications dans les fichiers sans commits
+- Explique moi un plan et demande mon approbation avant de modifier des fichiers
+
+
 ## Contexte du projet
 
 Ce dépôt est le service d'**Authentification** de Chatvardage pour le Contrôle 2 du cours `420-5A6-ST – A26`.
@@ -148,6 +155,7 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 - Respecter `cargo fmt` et `cargo clippy` — aucun warning clippy ignoré sans justification en commentaire.
 - Éviter `unwrap()`/`expect()` dans le code de production en dehors de `main.rs` (démarrage) — utiliser `Result`/`?` et `AppError` (voir `error.rs`).
 - Garder les contrôleurs (`interface/http/*_controller.rs`) minces : extraction JSON/en-têtes et délégation au service.
+- Toujours extraire le corps JSON et les segments d'URL via `super::extracteurs::{Json, Path}` (jamais `axum::extract::Json`/`Path` directement) : ce sont eux qui garantissent que toute erreur d'extraction (JSON malformé, valeur d'énumération invalide, UUID invalide dans l'URL) respecte l'enveloppe `{ "erreur": ... }` documentée dans `docs/API.md`, plutôt que le corps en texte brut par défaut d'axum.
 - Garder la logique métier dans `application::auth_service::AuthService`.
 - Garder l'accès aux données derrière `domain::ports::UtilisateurRepositoryPort` — pas d'appel SQLx direct depuis `application/` ou `interface/`. Prisma n'est utilisé dans ce dépôt que pour le schéma et les migrations (`prisma/schema.prisma`) : aucun client Prisma n'est appelé au runtime, l'accès PostgreSQL passe uniquement par SQLx dans `infrastructure/pg_utilisateur_repository.rs`.
 - Réutiliser `exiger_admin` (`middleware.rs`) au lieu de dupliquer les règles de permission par rôle.
@@ -161,9 +169,14 @@ Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microserv
 
 ### Séquence attendue du Dockerfile
 
-1. **Build** : compiler le binaire Rust (`cargo build --release`) et exécuter `npx prisma generate` — nécessite d'ajouter Node.js à l'étape de build (l'image `rust:1-slim-bookworm` ne l'a pas par défaut).
-2. **Image finale** : embarquer le binaire Rust compilé **et** de quoi exécuter le CLI Prisma (Node.js + `node_modules/.prisma`, `node_modules/@prisma`, `prisma/`) au démarrage.
-3. **`CMD`** : `npx prisma migrate deploy && ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse).
+Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
+
+1. **`builder`** (`rust:1-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
+2. **`node-deps`** (`node:20-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:20-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
+4. **`CMD`** : `npx prisma migrate deploy && ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse).
+
+Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.
 
 ### Test en solo (ce dépôt seul)
 
@@ -209,7 +222,6 @@ Règles à respecter :
 - ne jamais committer de vrais secrets — `JWT_SECRET` et les mots de passe de dev restent dans `.env`/`.env.example`, jamais en dur dans un fichier versionné;
 - les dépôts doivent être clonés côte à côte (`.../A26_5A6_01-Infra` et `.../A26_5A6_01-Authentification`) pour que le `context: ../A26_5A6_01-Authentification` fonctionne;
 - le `docker-compose.yml` de **ce** dépôt sert uniquement au développement local autonome — ce n'est pas celui utilisé par `infra`.
-- ne crée pas de commits, fait seulement des modifications dans les fichiers. explique moi un plan et demande mon approbation avant de modifier des fichiers
 
 Ne pas ajouter Redis à ce service : Redis sert au flux temps réel du service de messagerie, pas à l'authentification, même si `infra` le démarre pour l'équipe.
 

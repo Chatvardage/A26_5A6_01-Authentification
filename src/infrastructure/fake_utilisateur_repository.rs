@@ -96,7 +96,11 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             .read()
             .await
             .values()
-            .find(|u| u.pseudo == identifiant || u.courriel == identifiant)
+            // Même règle que PgUtilisateurRepository::trouver_par_identifiant :
+            // `courriel` est comparé insensible à la casse (la colonne est
+            // toujours stockée en minuscules par AuthService), `pseudo`
+            // reste sensible à la casse.
+            .find(|u| u.pseudo == identifiant || u.courriel.eq_ignore_ascii_case(identifiant))
             .cloned())
     }
 
@@ -187,6 +191,30 @@ mod tests {
                 .id,
             utilisateur.id
         );
+    }
+
+    #[tokio::test]
+    async fn trouver_par_identifiant_ignore_la_casse_du_courriel_mais_pas_du_pseudo() {
+        let repo = FakeUtilisateurRepository::new();
+        let utilisateur = repo
+            .creer("Alice", "alice@example.com", "hash")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            repo.trouver_par_identifiant("ALICE@EXAMPLE.COM")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            utilisateur.id
+        );
+        // Le pseudo, lui, reste sensible à la casse.
+        assert!(repo
+            .trouver_par_identifiant("alice")
+            .await
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]

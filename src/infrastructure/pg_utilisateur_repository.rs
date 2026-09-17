@@ -64,9 +64,17 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         &self,
         identifiant: &str,
     ) -> Result<Option<Utilisateur>, RepoError> {
+        // `courriel = LOWER($1)` : la colonne est toujours stockée en
+        // minuscules (voir `AuthService::inscrire`/`modifier_*`, qui
+        // normalisent avant d'appeler ce dépôt) — c'est `identifiant`, la
+        // valeur tapée par la personne qui se connecte, qui peut avoir
+        // n'importe quelle casse. `pseudo`, lui, reste sensible à la
+        // casse (comparaison exacte), volontairement : rien dans
+        // l'énoncé n'exige l'insensibilité à la casse pour un pseudo, et
+        // le sujet initial ne signalait ce problème que pour le courriel.
         sqlx::query_as::<_, Utilisateur>(
             "SELECT id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le \
-             FROM utilisateurs WHERE courriel = $1 OR pseudo = $1",
+             FROM utilisateurs WHERE courriel = LOWER($1) OR pseudo = $1",
         )
         .bind(identifiant)
         .fetch_optional(&self.pool)
@@ -208,6 +216,30 @@ mod tests {
                 .id,
             cree.id
         );
+
+        repo.supprimer(cree.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn trouver_par_identifiant_ignore_la_casse_du_courriel_mais_pas_du_pseudo() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("Helga");
+        let courriel = format!("{pseudo}@example.com").to_lowercase();
+        let cree = repo.creer(&pseudo, &courriel, "hash").await.unwrap();
+
+        let trouve = repo
+            .trouver_par_identifiant(&courriel.to_uppercase())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(trouve.id, cree.id);
+
+        // Le pseudo reste sensible à la casse.
+        assert!(repo
+            .trouver_par_identifiant(&pseudo.to_lowercase())
+            .await
+            .unwrap()
+            .is_none());
 
         repo.supprimer(cree.id).await.unwrap();
     }

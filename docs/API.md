@@ -56,6 +56,15 @@ Toute erreur renvoie un corps de la forme :
 { "erreur": "description lisible du problème" }
 ```
 
+Cette enveloppe est garantie **sans exception**, y compris pour un JSON
+syntaxiquement invalide, un champ manquant ou du mauvais type (ex.
+`{"role": "superadmin"}`, qui n'existe pas dans l'énumération) ou un
+segment d'URL qui ne parse pas (ex. un `id` qui n'est pas un UUID) : les
+handlers utilisent des extracteurs `Json`/`Path` personnalisés
+(`src/interface/http/extracteurs.rs`) qui reformatent toute erreur
+d'extraction axum vers cette même enveloppe, plutôt que le corps en texte
+brut renvoyé par défaut par `axum::extract::Json`/`Path`.
+
 | Code | Signification |
 |------|----------------|
 | 400  | Requête invalide (validation échouée : champ manquant, format incorrect) |
@@ -298,6 +307,13 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
   via `JWT_DUREE_DE_VIE_HEURES`).
 - `identifiant` de connexion accepte courriel OU pseudo, comme demandé dans
   l'énoncé.
+- Le courriel est normalisé en minuscules avant d'être stocké
+  (`Alice@Example.com` et `alice@example.com` désignent le même compte,
+  et la connexion fonctionne quelle que soit la casse tapée) — c'est
+  pourquoi le champ `courriel` d'un objet utilisateur est toujours en
+  minuscules dans les réponses, même si une casse différente a été
+  fournie à l'inscription ou lors d'une modification. Le `pseudo` reste
+  sensible à la casse.
 - PostgreSQL est la source de vérité — il n'y a pas de mode mock/en
   mémoire dans ce service. Le schéma de la table `utilisateurs` est géré
   par les migrations Prisma de ce dépôt (voir README, section

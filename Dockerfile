@@ -13,12 +13,11 @@ FROM rust:1-slim-bookworm AS builder
 
 WORKDIR /app
 
-# Dépendances système nécessaires pour compiler les dépendances natives
-# de l'écosystème Rust (liaison avec les bibliothèques C standards).
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Pas de paquets système supplémentaires ici : sqlx est configuré avec
+# `runtime-tokio-rustls` (TLS en Rust pur, sans OpenSSL) et aucune autre
+# dépendance du projet ne lie de bibliothèque native (`cargo tree`
+# confirme l'absence d'`openssl-sys`/`native-tls`) — `libssl-dev`/
+# `pkg-config` ont été retirés parce qu'inutiles, pas oubliés.
 
 # Astuce de cache Docker : on copie d'abord uniquement les fichiers de
 # dépendances et on compile un projet vide. Tant que Cargo.toml ne

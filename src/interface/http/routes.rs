@@ -284,6 +284,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inscription_rejette_un_corps_json_malforme() {
+        let ctx = nouveau_contexte();
+        // Champ `courriel` manquant : erreur de désérialisation Serde, pas
+        // une erreur de validation `validator` — passe par un chemin de
+        // code différent (voir `interface::http::extracteurs::Json`).
+        // Sans cet extracteur personnalisé, axum renverrait un corps en
+        // texte brut (422), pas l'enveloppe JSON `{ "erreur": ... }`
+        // documentée dans docs/API.md.
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": "alice" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert!(corps["erreur"].as_str().unwrap().contains("courriel"));
+    }
+
+    #[tokio::test]
+    async fn inscription_est_insensible_a_la_casse_du_courriel() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "Alice@Example.com", "motdepasse123").await;
+
+        // Même courriel, casse différente : doit être refusé comme un
+        // doublon, pas créer un second compte.
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": "bob", "courriel": "ALICE@example.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::CONFLICT);
+
+        // Connexion avec une casse différente de celle utilisée à
+        // l'inscription : doit réussir (le courriel est normalisé en
+        // minuscules avant stockage — voir `AuthService::inscrire`).
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice@EXAMPLE.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["utilisateur"]["courriel"], "alice@example.com");
+    }
+
+    #[tokio::test]
     async fn inscription_rejette_un_pseudo_deja_pris() {
         let ctx = nouveau_contexte();
         inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
@@ -825,6 +878,53 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn changer_role_rejette_une_valeur_de_role_inconnue() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        // "superadmin" n'existe pas dans l'énumération Role : erreur de
+        // désérialisation Serde (voir extracteurs::Json), pas une entrée
+        // qui atteint `AuthService`.
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "superadmin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert!(corps["erreur"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn segment_id_non_uuid_est_rejete_proprement() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        // Un `id` qui n'est pas un UUID valide doit renvoyer l'enveloppe
+        // JSON standard, pas le corps en texte brut par défaut d'axum
+        // (voir extracteurs::Path).
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            "/api/users/pas-un-uuid",
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert!(corps["erreur"].as_str().is_some());
     }
 
     #[tokio::test]

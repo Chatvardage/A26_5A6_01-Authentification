@@ -3,9 +3,8 @@
 
 Service d'authentification et de gestion des comptes pour **ChatVardage**,
 écrit en Rust. Ce dépôt correspond à la portion « authentification »
-(courriel/pseudo + mot de passe, rôles) du **Contrôle 2** du cours
-420-5A6-ST — il fait partie d'une architecture **multiservice** : le
-client desktop (dépôt `A26_5A6_01-Frontend`, Contrôle 1) et un dépôt
+(courriel/pseudo + mot de passe, rôles) — il fait partie d'une architecture **multiservice** : le
+client desktop (dépôt `A26_5A6_01-Frontend`) et un dépôt
 `infra` séparé (docker-compose global de l'équipe) vivent ailleurs.
 
 > Convention de nommage : toutes les données (champs JSON, colonnes de
@@ -30,6 +29,7 @@ client desktop (dépôt `A26_5A6_01-Frontend`, Contrôle 1) et un dépôt
 - [Vérifier que ça fonctionne](#vérifier-que-ça-fonctionne)
 - [Lancer les tests](#lancer-les-tests)
 - [Endpoints de l'API](#endpoints-de-lapi)
+- [Créer un premier compte admin](#créer-un-premier-compte-admin)
 - [Intégration avec le reste de l'équipe](#intégration-avec-le-reste-de-léquipe)
 - [Versions (tags Git)](#versions-tags-git)
 - [Limites connues et pistes d'amélioration](#limites-connues-et-pistes-damélioration)
@@ -249,6 +249,7 @@ migration Prisma en local, il faut en plus :
 ```bash
 git clone <url-de-ce-dépôt>
 cd A26_5A6_01-Authentification
+cp .env.example .env
 docker compose up --build
 ```
 
@@ -330,6 +331,7 @@ Résumé :
 | `JWT_SECRET` | Secret de signature des JWT — **à changer avant la remise finale**, ne jamais committer un vrai secret |
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton (défaut : 24h) |
 | `PORT` | Port HTTP du service (défaut : 3001) |
+| `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
 
 ## Vérifier que ça fonctionne
 
@@ -420,6 +422,46 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | DELETE | `/api/users/:id` | admin | Supprimer un compte |
 | PATCH | `/api/users/:id/role` | admin | Changer le rôle d'un compte |
 
+## Créer un premier compte admin
+
+Aucun compte n'est admin par défaut : `POST /api/auth/register` attribue
+toujours le rôle `utilisateur` (par sécurité — sinon n'importe qui
+pourrait s'inscrire directement comme admin). Il n'existe pas non plus de
+route pour s'auto-promouvoir : `PATCH /api/users/{id}/role` est réservée
+aux admins, ce qui crée un problème de démarrage (« œuf et poule ») pour
+le tout premier admin. Marche à suivre :
+
+1. **S'inscrire normalement** via l'API :
+
+   ```bash
+   curl -X POST http://localhost:3001/api/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{"pseudo":"tonpseudo","courriel":"toi@example.com","mot_de_passe":"motdepasse123"}'
+   ```
+
+2. **Promouvoir ce compte manuellement en base** — la seule étape qui
+   sort de l'API, volontairement (voir plus haut) :
+
+   ```bash
+   docker exec chatvardage-auth-db psql -U chatvardage -d chatvardage_auth \
+     -c "UPDATE utilisateurs SET role='admin' WHERE pseudo='tonpseudo';"
+   ```
+
+3. **Se reconnecter pour obtenir un nouveau jeton.** Le rôle est figé
+   dans le JWT au moment de l'émission (`JwtService::generer_token`) :
+   l'ancien jeton, émis avec `role: "utilisateur"`, ne devient pas admin
+   rétroactivement.
+
+   ```bash
+   curl -X POST http://localhost:3001/api/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{"identifiant":"tonpseudo","mot_de_passe":"motdepasse123"}'
+   ```
+
+Une fois ce premier admin en place, il peut promouvoir n'importe quel
+autre compte (y compris vers `admin`) via `PATCH /api/users/{id}/role` —
+voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
+
 ## Limites connues et pistes d'amélioration
 
 - Pas de renouvellement de jeton (refresh token) : un jeton expiré oblige
@@ -427,14 +469,14 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
   vie par défaut).
 - Pas de limitation de débit (rate limiting) sur `/login` — à ajouter si le
   temps le permet, pour limiter les tentatives de force brute.
-- Le rôle `admin` doit actuellement être attribué manuellement en base de
-  données pour le tout premier compte administrateur (aucun compte n'est
-  admin par défaut à l'inscription, par sécurité) :
-  ```sql
-  UPDATE utilisateurs SET role = 'admin' WHERE pseudo = 'ton_pseudo';
-  ```
-  Une commande CLI ou un script de "seed" pourrait remplacer cette étape
-  manuelle dans une prochaine itération.
+- Le tout premier compte admin doit être créé manuellement en base de
+  données (voir [Créer un premier compte admin](#créer-un-premier-compte-admin)).
+  Une commande CLI ou un script de "seed" (ex. variable d'environnement
+  `ADMIN_BOOTSTRAP_PSEUDO` appliquée au démarrage) pourrait remplacer
+  cette étape manuelle dans une prochaine itération.
+- Aucune limite sur le nombre d'admins ni garde-fou du genre « il doit
+  rester au moins un admin » : un admin peut changer son propre rôle ou
+  celui de n'importe qui d'autre, y compris se rétrograder lui-même.
 - Un jeton émis reste valide jusqu'à son expiration même après suppression
   du compte ou changement de rôle (pas de liste de révocation) : `GET
   /api/auth/me` échoue bien après suppression (404, voir tests), mais un

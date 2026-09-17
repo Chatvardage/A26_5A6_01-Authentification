@@ -3,10 +3,7 @@
 //! inscrits", "Supprimer un utilisateur"). Chaque handler vérifie
 //! `exiger_admin` avant de faire quoi que ce soit.
 
-use axum::{
-    extract::{Path, State},
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json as ReponseJson};
 use uuid::Uuid;
 
 use crate::application::dto::{ChangerRoleRequest, ModifierUtilisateurRequest};
@@ -14,13 +11,14 @@ use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
 use crate::state::AppState;
 
+use super::extracteurs::{Json, Path};
 use super::middleware::{exiger_admin, UtilisateurAuthentifie};
 
 /// GET /api/users — liste tous les comptes (admin uniquement).
 pub async fn lister(
     State(state): State<AppState>,
     session: UtilisateurAuthentifie,
-) -> Result<Json<Vec<UtilisateurPublic>>, AppError> {
+) -> Result<ReponseJson<Vec<UtilisateurPublic>>, AppError> {
     exiger_admin(session.role)?;
 
     let utilisateurs = state
@@ -29,7 +27,7 @@ pub async fn lister(
         .await
         .map_err(|e| AppError::Interne(e.to_string()))?;
 
-    Ok(Json(
+    Ok(ReponseJson(
         utilisateurs
             .into_iter()
             .map(UtilisateurPublic::from)
@@ -42,7 +40,7 @@ pub async fn obtenir(
     State(state): State<AppState>,
     session: UtilisateurAuthentifie,
     Path(id): Path<Uuid>,
-) -> Result<Json<UtilisateurPublic>, AppError> {
+) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
     exiger_admin(session.role)?;
 
     let utilisateur = state
@@ -52,7 +50,7 @@ pub async fn obtenir(
         .map_err(|e| AppError::Interne(e.to_string()))?
         .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
 
-    Ok(Json(UtilisateurPublic::from(utilisateur)))
+    Ok(ReponseJson(UtilisateurPublic::from(utilisateur)))
 }
 
 /// PATCH /api/users/:id — modifie le pseudo/courriel d'un autre compte
@@ -62,12 +60,12 @@ pub async fn modifier(
     session: UtilisateurAuthentifie,
     Path(id): Path<Uuid>,
     Json(requete): Json<ModifierUtilisateurRequest>,
-) -> Result<Json<UtilisateurPublic>, AppError> {
+) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
     exiger_admin(session.role)?;
 
     let utilisateur = state.auth_service.modifier_utilisateur(id, requete).await?;
     tracing::info!(admin = %session.pseudo, cible = %id, "compte modifié par un administrateur");
-    Ok(Json(utilisateur))
+    Ok(ReponseJson(utilisateur))
 }
 
 /// DELETE /api/users/:id — supprime un compte (admin uniquement).
@@ -75,7 +73,7 @@ pub async fn supprimer(
     State(state): State<AppState>,
     session: UtilisateurAuthentifie,
     Path(id): Path<Uuid>,
-) -> Result<axum::http::StatusCode, AppError> {
+) -> Result<StatusCode, AppError> {
     exiger_admin(session.role)?;
 
     let supprime = state
@@ -86,7 +84,7 @@ pub async fn supprimer(
 
     if supprime {
         tracing::info!(admin = %session.pseudo, cible = %id, "compte supprimé par un administrateur");
-        Ok(axum::http::StatusCode::NO_CONTENT)
+        Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::Introuvable("utilisateur introuvable".into()))
     }
@@ -99,7 +97,7 @@ pub async fn changer_role(
     session: UtilisateurAuthentifie,
     Path(id): Path<Uuid>,
     Json(requete): Json<ChangerRoleRequest>,
-) -> Result<Json<UtilisateurPublic>, AppError> {
+) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
     exiger_admin(session.role)?;
 
     let utilisateur = state
@@ -117,5 +115,5 @@ pub async fn changer_role(
         nouveau_role,
         "rôle modifié par un administrateur"
     );
-    Ok(Json(utilisateur))
+    Ok(ReponseJson(utilisateur))
 }

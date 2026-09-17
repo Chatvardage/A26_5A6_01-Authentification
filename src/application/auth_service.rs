@@ -5,12 +5,13 @@
 //! la réponse.
 //!
 //! `AuthService` ne dépend que du port `UtilisateurRepositoryPort` (voir
-//! `domain::ports`), jamais de PostgreSQL directement : selon
-//! `USE_MOCK_DB`, `main.rs` lui injecte soit `PgUtilisateurRepository`,
-//! soit `MockUtilisateurRepository`, sans que ce fichier n'ait besoin de
-//! le savoir.
+//! `domain::ports`), jamais de PostgreSQL directement : `main.rs` lui
+//! injecte `PgUtilisateurRepository`, sans que ce fichier n'ait besoin de
+//! le savoir (les tests injectent leur propre implémentation en mémoire,
+//! voir `infrastructure::fake_utilisateur_repository`).
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 
 use uuid::Uuid;
 use validator::Validate;
@@ -43,10 +44,11 @@ impl AuthService {
         requete.validate().map_err(AppError::Validation)?;
 
         let hache = hacher_mot_de_passe(&requete.mot_de_passe)?;
+        let courriel = normaliser_courriel(&requete.courriel);
 
         let utilisateur = self
             .depot
-            .creer(&requete.pseudo, &requete.courriel, &hache)
+            .creer(&requete.pseudo, &courriel, &hache)
             .await
             .map_err(mapper_erreur_depot)?;
 
@@ -66,17 +68,27 @@ impl AuthService {
             .depot
             .trouver_par_identifiant(&requete.identifiant)
             .await
-            .map_err(|e| AppError::Interne(e.to_string()))?
-            // Message volontairement générique : on ne révèle jamais si
-            // c'est l'identifiant ou le mot de passe qui est incorrect
-            // (bonne pratique de sécurité, évite l'énumération de comptes).
-            .ok_or_else(|| AppError::NonAutorise("identifiant ou mot de passe invalide".into()))?;
+            .map_err(|e| AppError::Interne(e.to_string()))?;
 
-        if !verifier_mot_de_passe(&requete.mot_de_passe, &utilisateur.mot_de_passe_hache) {
-            return Err(AppError::NonAutorise(
-                "identifiant ou mot de passe invalide".into(),
-            ));
-        }
+        // Vérifie TOUJOURS un mot de passe avec Argon2, même si
+        // l'identifiant n'existe pas (contre un hachage factice) : sans
+        // ça, un identifiant inconnu répondrait immédiatement alors
+        // qu'un identifiant connu attend le calcul Argon2 (volontairement
+        // lent) — un attaquant pourrait distinguer les deux cas par
+        // chronométrage et énumérer les comptes existants malgré le
+        // message d'erreur générique ci-dessous.
+        let hache_a_verifier = match &utilisateur {
+            Some(u) => u.mot_de_passe_hache.clone(),
+            None => hachage_factice().to_string(),
+        };
+        let mot_de_passe_valide = verifier_mot_de_passe(&requete.mot_de_passe, &hache_a_verifier);
+
+        // Message volontairement générique : on ne révèle jamais si
+        // c'est l'identifiant ou le mot de passe qui est incorrect
+        // (bonne pratique de sécurité, évite l'énumération de comptes).
+        let utilisateur = utilisateur
+            .filter(|_| mot_de_passe_valide)
+            .ok_or_else(|| AppError::NonAutorise("identifiant ou mot de passe invalide".into()))?;
 
         let jeton =
             self.jwt
@@ -107,13 +119,14 @@ impl AuthService {
             .as_deref()
             .map(hacher_mot_de_passe)
             .transpose()?;
+        let courriel = requete.courriel.as_deref().map(normaliser_courriel);
 
         let utilisateur = self
             .depot
             .modifier(
                 id,
                 requete.pseudo.as_deref(),
-                requete.courriel.as_deref(),
+                courriel.as_deref(),
                 hache_mot_de_passe.as_deref(),
             )
             .await
@@ -154,20 +167,41 @@ impl AuthService {
             ));
         }
 
+        let courriel = requete.courriel.as_deref().map(normaliser_courriel);
+
         let utilisateur = self
             .depot
-            .modifier(
-                id,
-                requete.pseudo.as_deref(),
-                requete.courriel.as_deref(),
-                None,
-            )
+            .modifier(id, requete.pseudo.as_deref(), courriel.as_deref(), None)
             .await
             .map_err(mapper_erreur_depot)?
             .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
 
         Ok(UtilisateurPublic::from(utilisateur))
     }
+}
+
+/// Normalise un courriel avant stockage/comparaison : `Alice@Example.com`
+/// et `alice@example.com` doivent désigner le même compte (voir
+/// `domain::ports::UtilisateurRepositoryPort::trouver_par_identifiant`,
+/// qui compare la colonne `courriel` insensible à la casse en supposant
+/// qu'elle est toujours stockée ainsi). Ne touche jamais à `pseudo`,
+/// volontairement sensible à la casse.
+fn normaliser_courriel(courriel: &str) -> String {
+    courriel.trim().to_lowercase()
+}
+
+/// Hachage Argon2 valide mais rattaché à aucun compte réel, utilisé par
+/// `connecter` pour égaliser le temps de réponse entre un identifiant
+/// inconnu et un mot de passe incorrect (voir le commentaire dans
+/// `connecter`). Calculé une seule fois par processus (`OnceLock`) : le
+/// recalculer à chaque tentative de connexion coûterait aussi cher qu'un
+/// vrai hachage, sans bénéfice supplémentaire.
+fn hachage_factice() -> &'static str {
+    static HACHAGE: OnceLock<String> = OnceLock::new();
+    HACHAGE.get_or_init(|| {
+        hacher_mot_de_passe("mot-de-passe-factice-jamais-utilise-pour-un-vrai-compte")
+            .expect("le hachage factice doit toujours réussir")
+    })
 }
 
 /// Traduit les erreurs de stockage (ex. pseudo/courriel déjà pris) en

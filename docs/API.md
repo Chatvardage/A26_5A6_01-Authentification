@@ -67,11 +67,12 @@ brut renvoyé par défaut par `axum::extract::Json`/`Path`.
 
 | Code | Signification |
 |------|----------------|
-| 400  | Requête invalide (validation échouée : champ manquant, format incorrect) |
+| 400  | Requête invalide (validation échouée : champ manquant, format incorrect, JSON malformé) |
 | 401  | Non authentifié (jeton manquant, invalide ou expiré) / identifiants incorrects |
 | 403  | Authentifié, mais rôle insuffisant (route admin) |
 | 404  | Ressource introuvable |
 | 409  | Conflit (pseudo ou courriel déjà utilisé) |
+| 413  | Corps de la requête trop volumineux (plus de 16 Kio, voir `interface::http::routes`) |
 | 500  | Erreur interne du serveur |
 
 ---
@@ -109,9 +110,9 @@ inscription, pas besoin d'un second appel à `/login`).
 
 | Champ | Règle |
 |-------|-------|
-| pseudo | 3 à 20 caractères |
-| courriel | format courriel valide |
-| mot_de_passe | 8 caractères minimum |
+| pseudo | 3 à 20 caractères, ne peut pas contenir `@` (réservé aux courriels — sinon un pseudo comme `alice@x.co` pourrait être confondu avec un courriel à la connexion) |
+| courriel | format courriel valide, 254 caractères maximum (RFC 5321) ; normalisé en minuscules avant stockage |
+| mot_de_passe | 8 à 128 caractères |
 
 **Réponse `200`**
 
@@ -200,9 +201,9 @@ admins).
 
 | Champ | Règle |
 |-------|-------|
-| pseudo | optionnel, 3 à 20 caractères si fourni |
-| courriel | optionnel, format courriel valide si fourni |
-| mot_de_passe | optionnel, 8 caractères minimum si fourni (rehaché avec Argon2) |
+| pseudo | optionnel, 3 à 20 caractères si fourni, ne peut pas contenir `@` |
+| courriel | optionnel, format courriel valide et 254 caractères maximum si fourni ; normalisé en minuscules |
+| mot_de_passe | optionnel, 8 à 128 caractères si fourni (rehaché avec Argon2) |
 
 **Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
 
@@ -261,6 +262,10 @@ rôle, voir les routes dédiées ci-dessous.
 ```json
 { "pseudo": "alice2", "courriel": "alice2@example.com" }
 ```
+
+Mêmes règles que `pseudo`/`courriel` sur `PATCH /api/auth/me` (voir plus
+haut) : pseudo 3-20 caractères sans `@`, courriel valide et 254
+caractères maximum (normalisé en minuscules).
 
 **Réponse `200`** : l'objet utilisateur mis à jour.
 

@@ -47,22 +47,11 @@ Le service doit conserver la responsabilité de :
 
 Ne pas déplacer ici les responsabilités des autres microservices.
 
-## Contrat avec le Gateway
+## Contrat HTTP
 
-Le service est destiné à être appelé derrière `Serveur-API`.
+Le service expose une API REST JSON sous `/api/auth` (inscription, connexion, profil) et `/api/users` (administration) — voir [docs/API.md](docs/API.md) pour le détail des routes, requêtes et réponses ; c'est la seule référence à jour du contrat réellement implémenté. Les routes protégées attendent un jeton JWT dans l'en-tête `Authorization: Bearer <jeton>` (voir `interface/http/middleware.rs`), jamais des en-têtes `x-*` personnalisés ni un préfixe `/http/routes` — une version antérieure de ce fichier décrivait un contrat par en-têtes qui n'a jamais été implémenté (probablement copié d'un autre service de l'équipe) ; ne pas s'y fier.
 
-Le Gateway transmet le courriel ou pseudo ainsi que le mot de passe :
-
-```http
-x-pseudo: <pseudo>
-x-courriel: <courriel>
-x-mot-de-passe: <mot-de-passe>
-x-role: <role>
-```
-
-Ne jamais considérer ces en-têtes comme sûrs si le service devient directement exposé à Internet. Dans l'architecture finale, l'authentification doit rester un service interne.
-
-Toutes les routes sont sous `/http/routes`.
+Le service est destiné à être appelé derrière `Serveur-API` (le Gateway de l'équipe), qui doit relayer les mêmes routes/corps JSON tels quels plutôt que traduire vers un contrat différent. Dans l'architecture finale, l'authentification doit rester un service interne, jamais exposé directement à Internet.
 
 ## Base de données et Prisma
 
@@ -159,7 +148,7 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 - Garder la logique métier dans `application::auth_service::AuthService`.
 - Garder l'accès aux données derrière `domain::ports::UtilisateurRepositoryPort` — pas d'appel SQLx direct depuis `application/` ou `interface/`. Prisma n'est utilisé dans ce dépôt que pour le schéma et les migrations (`prisma/schema.prisma`) : aucun client Prisma n'est appelé au runtime, l'accès PostgreSQL passe uniquement par SQLx dans `infrastructure/pg_utilisateur_repository.rs`.
 - Réutiliser `exiger_admin` (`middleware.rs`) au lieu de dupliquer les règles de permission par rôle.
-- Valider les entrées avec `validator` sur les DTO (`application/dto.rs`).
+- Valider les entrées avec `validator` sur les DTO (`application/dto.rs`) — toujours donner une longueur **maximale** à un champ texte fourni par le client (pas seulement un minimum), sans quoi un client peut envoyer des valeurs arbitrairement volumineuses qui seront quand même traitées (ex. hachées avec Argon2, délibérément coûteux en CPU) avant d'être rejetées ailleurs.
 - Retourner des erreurs HTTP explicites via `AppError`, jamais un `panic!` qui ferait planter le service.
 - Ne pas laisser de code mort, de `println!` de debug (utiliser `tracing::info!/warn!/error!`) ou de dépendances inutilisées dans `Cargo.toml`.
 
@@ -219,7 +208,7 @@ auth-service:
 Règles à respecter :
 
 - utiliser le nom du service Docker (`postgres`), jamais `localhost`, pour joindre la base depuis l'intérieur du conteneur;
-- ne jamais committer de vrais secrets — `JWT_SECRET` et les mots de passe de dev restent dans `.env`/`.env.example`, jamais en dur dans un fichier versionné;
+- ne jamais committer de vrais secrets — `JWT_SECRET` et les mots de passe de dev restent dans `.env`/`.env.example`, jamais en dur dans un fichier versionné; `JWT_SECRET` doit toujours faire au moins 16 caractères (le service refuse de démarrer sinon, voir `config.rs`) — une variable présente mais vide (ex. `.env.example` copié sans être rempli) signerait sinon tous les jetons avec une clé triviale;
 - les dépôts doivent être clonés côte à côte (`.../A26_5A6_01-Infra` et `.../A26_5A6_01-Authentification`) pour que le `context: ../A26_5A6_01-Authentification` fonctionne;
 - le `docker-compose.yml` de **ce** dépôt sert uniquement au développement local autonome — ce n'est pas celui utilisé par `infra`.
 

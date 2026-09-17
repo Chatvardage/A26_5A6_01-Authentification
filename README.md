@@ -328,10 +328,11 @@ Résumé :
 | Variable | Rôle |
 |----------|------|
 | `DATABASE_URL` | Chaîne de connexion PostgreSQL — **toujours requise**, aucune valeur par défaut (lue à la fois par Prisma pour les migrations et par SQLx au runtime). Format : `postgresql://<user>:<mot_de_passe>@<hôte>:5432/<base>`. Ex. local : `postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth` ; dans le réseau Docker d'`infra` : `postgresql://auth_service:auth_service_dev@postgres:5432/chatvardage_auth`. Le suffixe `?schema=public` (convention Prisma) est **volontairement omis** : testé et accepté par SQLx, qui l'ignore avec un simple avertissement (`ignoring unrecognized connect parameter`) plutôt qu'une erreur — inutile de toute façon puisque `public` est déjà le schéma par défaut de PostgreSQL. |
-| `JWT_SECRET` | Secret de signature des JWT — **à changer avant la remise finale**, ne jamais committer un vrai secret |
+| `JWT_SECRET` | Secret de signature des JWT — **toujours requis, au moins 16 caractères** (le service refuse de démarrer sinon, y compris si la variable existe mais est vide — voir `config.rs`). **À changer avant la remise finale**, ne jamais committer un vrai secret. |
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton (défaut : 24h) |
 | `PORT` | Port HTTP du service (défaut : 3001) |
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
+| `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente ou vide par défaut : CORS permissif (`Access-Control-Allow-Origin: *`), pratique en développement solo, mais ce service est censé rester interne (voir `AGENTS.md`) — l'infra d'équipe devrait fournir la vraie liste des origines en production. |
 
 ## Vérifier que ça fonctionne
 

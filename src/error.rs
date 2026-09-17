@@ -35,9 +35,22 @@ pub enum AppError {
     /// Requête syntaxiquement valide (chaque champ fourni respecte ses
     /// contraintes) mais qui viole une règle métier ad hoc, ex. "au moins
     /// un champ doit être fourni" sur un PATCH partiel — pas exprimable
-    /// avec un validateur de champ individuel de `validator`.
+    /// avec un validateur de champ individuel de `validator`. Toujours
+    /// 400 : contrairement à `Extraction` ci-dessous, il ne s'agit jamais
+    /// d'autre chose qu'une requête mal formée du point de vue métier.
     #[error("requête invalide: {0}")]
     Requete(String),
+
+    /// Échec de nos extracteurs `Json`/`Path` personnalisés
+    /// (`interface::http::extracteurs`) : reformate une
+    /// `JsonRejection`/`PathRejection` d'axum vers l'enveloppe
+    /// `{ "erreur": ... }` attendue, tout en conservant le code de statut
+    /// que l'extracteur nu aurait renvoyé (400 pour un JSON malformé,
+    /// mais 413 pour un corps trop volumineux, 415 pour un
+    /// `Content-Type` incorrect, etc.) — contrairement à `Requete`, ce
+    /// n'est jamais nécessairement un 400.
+    #[error("erreur d'extraction ({0}): {1}")]
+    Extraction(StatusCode, String),
 
     #[error("erreur interne: {0}")]
     Interne(String),
@@ -52,6 +65,7 @@ impl IntoResponse for AppError {
             AppError::Conflit(m) => (StatusCode::CONFLICT, m.clone()),
             AppError::Validation(erreurs) => (StatusCode::BAD_REQUEST, erreurs.to_string()),
             AppError::Requete(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            AppError::Extraction(statut, m) => (*statut, m.clone()),
             AppError::Interne(m) => {
                 // On journalise le détail réel côté serveur, mais on ne
                 // le renvoie JAMAIS au client (pourrait exposer des

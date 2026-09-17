@@ -4,17 +4,33 @@
 //! des requêtes/réponses).
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, patch, post},
     Router,
 };
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
 
 use super::{auth_controller, utilisateurs_controller};
 
-pub fn construire(state: AppState) -> Router {
+/// Plafond explicite pour le corps des requêtes JSON de ce service —
+/// bien au-delà de tout besoin légitime (les plus gros champs validés,
+/// `mot_de_passe`/`courriel`, sont eux-mêmes plafonnés à quelques
+/// centaines de caractères, voir `application/dto.rs`), mais bien en
+/// dessous des 2 Mo par défaut d'axum. Réduit la fenêtre pour un client
+/// qui enverrait des corps volumineux dans l'espoir de faire travailler
+/// inutilement le serveur (désérialisation, puis rejet par `validator`).
+const LIMITE_CORPS_REQUETE_OCTETS: usize = 16 * 1024;
+
+/// `origines_autorisees` : liste blanche CORS (`None` ou liste vide =
+/// permissif, `Access-Control-Allow-Origin: *` — pratique en développement
+/// solo, mais ce service est censé rester interne, voir AGENTS.md). En
+/// pratique, l'infra d'équipe passera la liste des origines réellement
+/// utilisées (app desktop Electron, panneau d'administration web) via
+/// `CORS_ALLOWED_ORIGINS` (voir `config.rs`).
+pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Router {
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
         .route("/login", post(auth_controller::login))
@@ -35,13 +51,20 @@ pub fn construire(state: AppState) -> Router {
         )
         .route("/:id/role", patch(utilisateurs_controller::changer_role));
 
-    // CORS permissif pour le développement (l'app desktop Electron et
-    // le panneau d'administration web appellent l'API depuis des
-    // origines différentes). À restreindre en production si nécessaire.
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+    let cors = match origines_autorisees {
+        Some(origines) if !origines.is_empty() => {
+            let valeurs: Vec<_> = origines.iter().filter_map(|o| o.parse().ok()).collect();
+            CorsLayer::new()
+                .allow_origin(AllowOrigin::list(valeurs))
+                .allow_methods(Any)
+                .allow_headers(Any)
+        }
+        // Permissif par défaut (dev solo, voir doc de `construire` ci-dessus).
+        _ => CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    };
 
     Router::new()
         .route("/health", get(sante))
@@ -49,6 +72,7 @@ pub fn construire(state: AppState) -> Router {
         .nest("/api/users", api_users)
         .layer(TraceLayer::new_for_http())
         .layer(cors)
+        .layer(DefaultBodyLimit::max(LIMITE_CORPS_REQUETE_OCTETS))
         .with_state(state)
 }
 
@@ -119,7 +143,7 @@ mod tests {
             jwt_service,
         };
         Contexte {
-            app: construire(state),
+            app: construire(state, None),
             depot_concret,
             secret,
         }
@@ -240,6 +264,74 @@ mod tests {
         assert_eq!(reponse.status(), StatusCode::OK);
         let octets = reponse.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&octets[..], b"ok");
+    }
+
+    #[tokio::test]
+    async fn cors_restreint_aux_origines_configurees() {
+        let depot: Arc<dyn UtilisateurRepositoryPort> = Arc::new(FakeUtilisateurRepository::new());
+        let jwt_service = Arc::new(JwtService::new("secret-de-test".to_string(), 24));
+        let auth_service = AuthService::new(depot.clone(), jwt_service.clone());
+        let state = AppState {
+            auth_service,
+            depot_utilisateurs: depot,
+            jwt_service,
+        };
+        let origines = vec!["http://exemple-autorise.test".to_string()];
+        let app = construire(state, Some(&origines));
+
+        let reponse_autorisee = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("Origin", "http://exemple-autorise.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reponse_autorisee
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            "http://exemple-autorise.test"
+        );
+
+        let reponse_refusee = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("Origin", "http://exemple-non-autorise.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(reponse_refusee
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn corps_de_requete_trop_volumineux_est_refuse() {
+        let ctx = nouveau_contexte();
+        // Dépasse LIMITE_CORPS_REQUETE_OCTETS (16 Kio) — un mot de passe
+        // de cette taille serait de toute façon rejeté par `validator`
+        // (max 128 caractères), mais la limite de taille de corps doit
+        // intervenir avant même la désérialisation JSON.
+        let corps_volumineux = "a".repeat(20 * 1024);
+        let requete = Request::builder()
+            .method("POST")
+            .uri("/api/auth/register")
+            .header("content-type", "application/json")
+            .body(Body::from(format!(
+                "{{\"pseudo\":\"x\",\"courriel\":\"x@example.com\",\"mot_de_passe\":\"{corps_volumineux}\"}}"
+            )))
+            .unwrap();
+        let reponse = ctx.app.oneshot(requete).await.unwrap();
+        assert_eq!(reponse.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
 
     #[tokio::test]

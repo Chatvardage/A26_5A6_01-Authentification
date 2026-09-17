@@ -55,7 +55,7 @@ async fn main() {
         jwt_service,
     };
 
-    let app = interface::http::routes::construire(state);
+    let app = interface::http::routes::construire(state, config.cors_allowed_origins.as_deref());
 
     let adresse = format!("0.0.0.0:{}", config.port);
     tracing::info!("service d'authentification à l'écoute sur {adresse}");

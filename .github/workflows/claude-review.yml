@@ -24,7 +24,7 @@ jobs:
           git diff ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > /tmp/diff.txt
 
           # Ask Claude to review the diff — diff is piped via stdin, not inlined into argv
-          claude --print "Review this git diff for code quality, bugs, performance, and security issues. Format your feedback as clean markdown comments referencing the files. Check the API.md, AGENTS.md and README.md for reference. Formulate your review in french." < /tmp/diff.txt > /tmp/review.md
+          claude --print "Review this git diff for code quality, bugs, performance, and security issues. Format your feedback as clean markdown comments referencing the files. Check the API.md, AGENTS.md, README.md and anything in /docs for reference. Formulate your review in french." < /tmp/diff.txt > /tmp/review.md
 
           # Post the review back to the PR — --body-file avoids the same argv-length risk
           gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md

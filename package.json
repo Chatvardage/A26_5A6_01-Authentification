@@ -1,0 +1,17 @@
+{
+  "name": "chatvardage-auth-migrations",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Outillage Prisma (schéma + migrations) pour le service d'authentification ChatVardage. Le service lui-même est un binaire Rust (voir Cargo.toml) — ce package.json ne sert qu'à figer la version de la CLI Prisma utilisée pour gérer le schéma de la table utilisateurs.",
+  "scripts": {
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy"
+  },
+  "devDependencies": {
+    "prisma": "5.20.0"
+  },
+  "dependencies": {
+    "@prisma/client": "5.20.0"
+  }
+}

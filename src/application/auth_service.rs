@@ -24,7 +24,7 @@ use crate::infrastructure::mot_de_passe::{hacher_mot_de_passe, verifier_mot_de_p
 
 use super::dto::{
     AuthResponse, ConnexionRequest, InscriptionRequest, ModifierProfilRequest,
-    ModifierUtilisateurRequest,
+    ModifierUtilisateurRequest, SupprimerCompteRequest,
 };
 
 #[derive(Clone)]
@@ -129,12 +129,16 @@ impl AuthService {
         // `ModifierProfilRequest::mot_de_passe_actuel`). Un changement de
         // pseudo seul n'a pas besoin de cette confirmation.
         if requete.courriel.is_some() || requete.mot_de_passe.is_some() {
-            let mot_de_passe_actuel = requete.mot_de_passe_actuel.as_deref().ok_or_else(|| {
-                AppError::Requete(
-                    "le mot de passe actuel est requis pour changer le courriel ou le mot de passe"
-                        .into(),
-                )
-            })?;
+            let mot_de_passe_actuel = requete
+                .mot_de_passe_actuel
+                .as_deref()
+                .filter(|mot_de_passe| !mot_de_passe.is_empty())
+                .ok_or_else(|| {
+                    AppError::Requete(
+                        "le mot de passe actuel est requis pour changer le courriel ou le mot de passe"
+                            .into(),
+                    )
+                })?;
 
             let utilisateur_actuel = self
                 .depot
@@ -172,8 +176,31 @@ impl AuthService {
         Ok(UtilisateurPublic::from(utilisateur))
     }
 
-    /// `DELETE /api/auth/me` : supprime son propre compte.
-    pub async fn supprimer_compte(&self, id: Uuid) -> Result<(), AppError> {
+    /// `DELETE /api/auth/me` : supprime son propre compte après
+    /// reconfirmation du mot de passe actuel.
+    pub async fn supprimer_compte(
+        &self,
+        id: Uuid,
+        requete: SupprimerCompteRequest,
+    ) -> Result<(), AppError> {
+        requete.validate().map_err(AppError::Validation)?;
+
+        let utilisateur_actuel = self
+            .depot
+            .trouver_par_id(id)
+            .await
+            .map_err(|e| AppError::Interne(e.to_string()))?
+            .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+        if !verifier_mot_de_passe(
+            &requete.mot_de_passe_actuel,
+            &utilisateur_actuel.mot_de_passe_hache,
+        ) {
+            return Err(AppError::NonAutorise(
+                "mot de passe actuel incorrect".into(),
+            ));
+        }
+
         let supprime = self
             .depot
             .supprimer(id)

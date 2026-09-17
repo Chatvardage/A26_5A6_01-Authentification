@@ -236,8 +236,19 @@ compte de quelqu'un d'autre).
 
 **Réponse `204`** (pas de corps) si supprimé.
 
-**Erreurs** : `401` (jeton manquant, invalide, expiré, ou associé à un
-compte déjà supprimé).
+**Corps de la requête**
+
+```json
+{ "mot_de_passe_actuel": "motdepasse123" }
+```
+
+`mot_de_passe_actuel` est obligatoire, entre 1 et 128 caractères. Cette
+confirmation empêche qu'un jeton volé suffise à supprimer irréversiblement
+un compte.
+
+**Erreurs** : `400` (mot de passe actuel absent, vide ou trop long), `401`
+(jeton manquant, invalide, expiré, associé à un compte déjà supprimé, ou
+mot de passe actuel incorrect).
 
 ---
 

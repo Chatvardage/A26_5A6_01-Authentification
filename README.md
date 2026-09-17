@@ -476,6 +476,10 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
 - Pas de renouvellement de jeton (refresh token) : un jeton expiré oblige
   à se reconnecter. Acceptable pour la portée du contrôle (24h de durée de
   vie par défaut).
+- Un changement de mot de passe ne révoque pas les JWT déjà émis : leur
+  signature reste valide jusqu'à leur expiration, tant que le compte existe.
+  Le middleware relit néanmoins le rôle courant en base, donc un changement
+  de rôle ou une suppression de compte prend effet immédiatement.
 - La limitation de débit de `/api/auth/login` et `/api/auth/register`
   relève du `Serveur-API` : le Gateway, point d'entrée unique, doit
   limiter ces routes publiques avant qu'elles ne déclenchent un hachage

@@ -821,7 +821,14 @@ mod tests {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
-        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
 
         // Le jeton reste cryptographiquement valide (il n'est pas révoqué
@@ -963,7 +970,14 @@ mod tests {
     async fn modifier_moi_courriel_apres_suppression_est_non_autorise() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
-        requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
 
         // Le jeton reste cryptographiquement valide (voir limites connues
         // du README) : c'est la vérification du mot de passe actuel, qui
@@ -994,6 +1008,23 @@ mod tests {
             "/api/auth/me",
             Some(&jeton),
             Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["pseudo"], "alice2");
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_pseudo_seul_ignore_un_mot_de_passe_actuel_vide() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2", "mot_de_passe_actuel": "" })),
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
@@ -1069,7 +1100,14 @@ mod tests {
     async fn modifier_moi_apres_suppression_est_non_autorise() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
-        requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
 
         let (statut, _) = requete(
             &ctx.app,
@@ -1085,7 +1123,39 @@ mod tests {
     #[tokio::test]
     async fn supprimer_moi_sans_jeton_est_refuse() {
         let ctx = nouveau_contexte();
-        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", None, None).await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            None,
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn supprimer_moi_sans_mot_de_passe_actuel_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn supprimer_moi_avec_un_mauvais_mot_de_passe_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "mauvais-mot-de-passe" })),
+        )
+        .await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
@@ -1094,10 +1164,24 @@ mod tests {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
-        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
 
-        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
@@ -1107,7 +1191,14 @@ mod tests {
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
         ctx.depot_concret.provoquer_erreur_interne(true);
 
-        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "motdepasse123" })),
+        )
+        .await;
         assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
     }
 

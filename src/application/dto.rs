@@ -152,11 +152,22 @@ pub struct ModifierProfilRequest {
     /// pratique recommandée par l'OWASP pour les actions sensibles sur
     /// un compte.
     #[validate(length(
-        min = 1,
         max = "LONGUEUR_MAX_MOT_DE_PASSE",
-        message = "mot de passe actuel requis pour changer le courriel ou le mot de passe"
+        message = "mot de passe actuel trop long"
     ))]
     pub mot_de_passe_actuel: Option<String>,
+}
+
+/// `DELETE /api/auth/me` : confirmation requise avant une suppression
+/// irréversible de son propre compte.
+#[derive(Debug, Deserialize, Validate)]
+pub struct SupprimerCompteRequest {
+    #[validate(length(
+        min = 1,
+        max = "LONGUEUR_MAX_MOT_DE_PASSE",
+        message = "mot de passe actuel requis pour supprimer le compte"
+    ))]
+    pub mot_de_passe_actuel: String,
 }
 
 /// `PATCH /api/users/{id}` (admin) : modification du pseudo/courriel

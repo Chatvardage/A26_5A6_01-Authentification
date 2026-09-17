@@ -6,6 +6,7 @@ use axum::{extract::State, http::StatusCode, Json as ReponseJson};
 
 use crate::application::dto::{
     AuthResponse, ConnexionRequest, InscriptionRequest, ModifierProfilRequest,
+    SupprimerCompteRequest,
 };
 use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
@@ -67,10 +68,11 @@ pub async fn modifier_moi(
 pub async fn supprimer_moi(
     State(state): State<AppState>,
     session: UtilisateurAuthentifie,
+    Json(requete): Json<SupprimerCompteRequest>,
 ) -> Result<StatusCode, AppError> {
     state
         .auth_service
-        .supprimer_compte(session.id_utilisateur)
+        .supprimer_compte(session.id_utilisateur, requete)
         .await?;
     Ok(StatusCode::NO_CONTENT)
 }

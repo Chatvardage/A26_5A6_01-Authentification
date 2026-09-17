@@ -92,6 +92,7 @@ pub struct UtilisateurPublic {
     pub courriel: String,
     pub role: Role,
     pub cree_le: chrono::DateTime<chrono::Utc>,
+    pub modifie_le: chrono::DateTime<chrono::Utc>,
 }
 
 impl From<Utilisateur> for UtilisateurPublic {
@@ -107,6 +108,7 @@ impl From<Utilisateur> for UtilisateurPublic {
             courriel: u.courriel,
             role,
             cree_le: u.cree_le,
+            modifie_le: u.modifie_le,
         }
     }
 }
@@ -128,5 +130,28 @@ mod tests {
     #[test]
     fn role_inconnu_retombe_sur_utilisateur() {
         assert_eq!(Role::from_str("valeur-inattendue"), Role::Utilisateur);
+    }
+
+    #[test]
+    fn conversion_vers_utilisateur_public_masque_le_mot_de_passe_hache() {
+        let maintenant = chrono::Utc::now();
+        let utilisateur = Utilisateur {
+            id: Uuid::new_v4(),
+            pseudo: "alice".into(),
+            courriel: "alice@example.com".into(),
+            mot_de_passe_hache: "hash-secret".into(),
+            role: "admin".into(),
+            cree_le: maintenant,
+            modifie_le: maintenant,
+        };
+
+        let public = UtilisateurPublic::from(utilisateur.clone());
+
+        assert_eq!(public.id, utilisateur.id);
+        assert_eq!(public.pseudo, "alice");
+        assert_eq!(public.courriel, "alice@example.com");
+        assert_eq!(public.role, Role::Admin);
+        assert_eq!(public.cree_le, maintenant);
+        assert_eq!(public.modifie_le, maintenant);
     }
 }

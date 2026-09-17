@@ -1,6 +1,7 @@
 /target
 .env
 *.pdb
+node_modules/
 
 # Cache sqlx hors-ligne (si vous migrez un jour vers les macros query!)
 .sqlx/

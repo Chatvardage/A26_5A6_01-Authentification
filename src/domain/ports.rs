@@ -4,16 +4,15 @@
 //! c'est implémenté. Exemple : MessageRepository, Gateway,
 //! EventPublisher.").
 //!
-//! `UtilisateurRepositoryPort` est ce contrat. Deux implémentations
-//! existent dans `infrastructure/` :
-//! - `PgUtilisateurRepository` : la vraie base PostgreSQL.
-//! - `MockUtilisateurRepository` : un stockage en mémoire, pour
-//!   développer et tester sans dépendre de PostgreSQL ni du service qui
-//!   gère les migrations — même idée que `MockGateway` côté frontend.
-//!
-//! Ni `AuthService` ni les contrôleurs HTTP ne savent laquelle des deux
-//! est utilisée : ils ne connaissent que ce trait (voir `main.rs`, où le
-//! bon choix est fait une seule fois, au démarrage, selon `USE_MOCK_DB`).
+//! `UtilisateurRepositoryPort` est ce contrat. `PgUtilisateurRepository`
+//! (voir `infrastructure/pg_utilisateur_repository.rs`) en est l'unique
+//! implémentation de production, avec PostgreSQL comme source de vérité
+//! (aucun mode mock/en mémoire — voir README). Ni `AuthService` ni les
+//! contrôleurs HTTP ne dépendent directement de PostgreSQL : ils ne
+//! connaissent que ce trait (voir `main.rs`, où `PgUtilisateurRepository`
+//! est injecté au démarrage). Les tests d'intégration (`tests/`)
+//! fournissent leur propre implémentation en mémoire de ce trait,
+//! utilisée uniquement en compilation de test.
 
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -32,9 +31,26 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     async fn trouver_par_id(&self, id: Uuid) -> Result<Option<Utilisateur>, RepoError>;
 
     /// Recherche par courriel OU par pseudo (le login accepte les deux).
-    async fn trouver_par_identifiant(&self, identifiant: &str) -> Result<Option<Utilisateur>, RepoError>;
+    async fn trouver_par_identifiant(
+        &self,
+        identifiant: &str,
+    ) -> Result<Option<Utilisateur>, RepoError>;
 
     async fn lister(&self) -> Result<Vec<Utilisateur>, RepoError>;
+
+    /// Modifie un ou plusieurs champs d'un compte existant. Chaque
+    /// paramètre `None` laisse la valeur actuelle inchangée (équivalent
+    /// d'un `COALESCE` en SQL) — permet de réutiliser cette seule méthode
+    /// pour `PATCH /api/auth/me` (pseudo/courriel/mot de passe) et
+    /// `PATCH /api/users/{id}` (pseudo/courriel seulement, voir
+    /// `AuthService`). Retourne `None` si `id` n'existe pas.
+    async fn modifier(
+        &self,
+        id: Uuid,
+        pseudo: Option<&str>,
+        courriel: Option<&str>,
+        mot_de_passe_hache: Option<&str>,
+    ) -> Result<Option<Utilisateur>, RepoError>;
 
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError>;
 

@@ -4,7 +4,7 @@
 //! des requêtes/réponses).
 
 use axum::{
-    routing::{delete, get, patch, post},
+    routing::{get, patch, post},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -18,11 +18,21 @@ pub fn construire(state: AppState) -> Router {
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
         .route("/login", post(auth_controller::login))
-        .route("/me", get(auth_controller::me));
+        .route(
+            "/me",
+            get(auth_controller::me)
+                .patch(auth_controller::modifier_moi)
+                .delete(auth_controller::supprimer_moi),
+        );
 
     let api_users = Router::new()
         .route("/", get(utilisateurs_controller::lister))
-        .route("/:id", delete(utilisateurs_controller::supprimer))
+        .route(
+            "/:id",
+            get(utilisateurs_controller::obtenir)
+                .patch(utilisateurs_controller::modifier)
+                .delete(utilisateurs_controller::supprimer),
+        )
         .route("/:id/role", patch(utilisateurs_controller::changer_role));
 
     // CORS permissif pour le développement (l'app desktop Electron et
@@ -47,4 +57,828 @@ pub fn construire(state: AppState) -> Router {
 /// "Vérifier la santé de la base de données et de Redis").
 async fn sante() -> &'static str {
     "ok"
+}
+
+/// Tests de bout en bout : chaque test construit sa propre application
+/// (état + routes) avec un dépôt en mémoire dédié (`FakeUtilisateurRepository`,
+/// voir `infrastructure::fake_utilisateur_repository`) et envoie de
+/// vraies requêtes HTTP au `Router` via `tower::ServiceExt::oneshot` (pas
+/// de vraie socket TCP). C'est le niveau le plus proche de la réalité
+/// pour vérifier ensemble le routage, le middleware d'authentification
+/// et les contrôleurs — les tests unitaires plus bas dans chaque fichier
+/// couvrent la logique fine isolément.
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use http_body_util::BodyExt;
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    use serde_json::{json, Value};
+    use tower::ServiceExt;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::application::auth_service::AuthService;
+    use crate::domain::ports::UtilisateurRepositoryPort;
+    use crate::domain::utilisateur::Role;
+    use crate::infrastructure::fake_utilisateur_repository::FakeUtilisateurRepository;
+    use crate::infrastructure::jwt::{Claims, JwtService};
+
+    /// Environnement de test : garde une référence concrète au dépôt
+    /// (`depot_concret`) en plus de celle (dynamique) injectée dans
+    /// `AppState`, pour pouvoir promouvoir un compte admin directement
+    /// (voir README : la promotion admin est une opération manuelle,
+    /// hors API) et déclencher `provoquer_erreur_interne` dans les tests
+    /// de la branche 500.
+    struct Contexte {
+        app: Router,
+        depot_concret: Arc<FakeUtilisateurRepository>,
+        secret: String,
+    }
+
+    fn nouveau_contexte() -> Contexte {
+        // Sans abonné `tracing` actif (celui de `main.rs` n'est jamais
+        // exécuté ici), les macros `tracing::info!`/`debug!` considèrent
+        // qu'aucun abonné n'est intéressé et n'évaluent même pas leurs
+        // arguments — ex. `nouveau_role = utilisateur.role.as_str()` dans
+        // `utilisateurs_controller::changer_role` ne s'exécuterait jamais
+        // pendant les tests. `try_init` ignore silencieusement le cas où
+        // un abonné est déjà en place (appelé une fois par test).
+        let _ = tracing_subscriber::fmt::try_init();
+
+        let depot_concret = Arc::new(FakeUtilisateurRepository::new());
+        let depot: Arc<dyn UtilisateurRepositoryPort> = depot_concret.clone();
+        let secret = "secret-de-test".to_string();
+        let jwt_service = Arc::new(JwtService::new(secret.clone(), 24));
+        let auth_service = AuthService::new(depot.clone(), jwt_service.clone());
+        let state = AppState {
+            auth_service,
+            depot_utilisateurs: depot,
+            jwt_service,
+        };
+        Contexte {
+            app: construire(state),
+            depot_concret,
+            secret,
+        }
+    }
+
+    /// Envoie une requête au `Router` et retourne `(statut, corps_json)`.
+    /// `corps_json` vaut `Value::Null` pour une réponse sans corps (ex.
+    /// `204 No Content`).
+    async fn requete(
+        app: &Router,
+        methode: &str,
+        uri: &str,
+        jeton: Option<&str>,
+        corps: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let mut builder = Request::builder().method(methode).uri(uri);
+        if let Some(jeton) = jeton {
+            builder = builder.header("Authorization", format!("Bearer {jeton}"));
+        }
+        let requete = match corps {
+            Some(corps) => builder
+                .header("content-type", "application/json")
+                .body(Body::from(corps.to_string()))
+                .unwrap(),
+            None => builder.body(Body::empty()).unwrap(),
+        };
+
+        let reponse = app.clone().oneshot(requete).await.unwrap();
+        let statut = reponse.status();
+        let octets = reponse.into_body().collect().await.unwrap().to_bytes();
+        let corps_json = if octets.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&octets).unwrap_or(Value::Null)
+        };
+        (statut, corps_json)
+    }
+
+    /// Inscrit un compte et retourne `(id, jeton)`.
+    async fn inscrire(
+        app: &Router,
+        pseudo: &str,
+        courriel: &str,
+        mot_de_passe: &str,
+    ) -> (Uuid, String) {
+        let (statut, corps) = requete(
+            app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": pseudo, "courriel": courriel, "mot_de_passe": mot_de_passe })),
+        )
+        .await;
+        assert_eq!(
+            statut,
+            StatusCode::OK,
+            "échec d'inscription inattendu: {corps:?}"
+        );
+        let id = Uuid::parse_str(corps["utilisateur"]["id"].as_str().unwrap()).unwrap();
+        let jeton = corps["jeton"].as_str().unwrap().to_string();
+        (id, jeton)
+    }
+
+    /// Promeut un compte admin directement via le dépôt (voir README :
+    /// c'est une opération manuelle, il n'existe pas de route d'API pour
+    /// s'auto-promouvoir), puis se reconnecte pour obtenir un jeton dont
+    /// la revendication `role` reflète la promotion (le rôle est figé au
+    /// moment de l'émission du jeton — voir `JwtService::generer_token`).
+    async fn promouvoir_admin_et_relogin(
+        ctx: &Contexte,
+        id: Uuid,
+        pseudo: &str,
+        mot_de_passe: &str,
+    ) -> String {
+        ctx.depot_concret
+            .changer_role(id, Role::Admin)
+            .await
+            .unwrap();
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": pseudo, "mot_de_passe": mot_de_passe })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        corps["jeton"].as_str().unwrap().to_string()
+    }
+
+    /// Fabrique un jeton syntaxiquement valide (signé avec le même
+    /// secret que `ctx`) mais dont le contenu est choisi par l'appelant —
+    /// utile pour atteindre des branches d'erreur du middleware
+    /// impossibles à obtenir via `JwtService::generer_token` (ex. un
+    /// `sub` qui n'est pas un UUID).
+    fn forger_jeton(ctx: &Contexte, claims: Claims) -> String {
+        encode(
+            &Header::default(),
+            &claims,
+            &EncodingKey::from_secret(ctx.secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn sante_repond_ok() {
+        let ctx = nouveau_contexte();
+        let reponse = ctx
+            .app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reponse.status(), StatusCode::OK);
+        let octets = reponse.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&octets[..], b"ok");
+    }
+
+    #[tokio::test]
+    async fn inscription_puis_connexion_par_pseudo_et_par_courriel() {
+        let ctx = nouveau_contexte();
+        let (_, _jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["utilisateur"]["pseudo"], "alice");
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice@example.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn inscription_rejette_un_pseudo_trop_court() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": "ab", "courriel": "ab@example.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn inscription_rejette_un_pseudo_deja_pris() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": "alice", "courriel": "autre@example.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn inscription_erreur_de_stockage_retourne_500_generique() {
+        let ctx = nouveau_contexte();
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({ "pseudo": "alice", "courriel": "alice@example.com", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+        // Le détail de l'erreur ne doit jamais fuiter au client.
+        assert_eq!(corps["erreur"], "une erreur interne est survenue");
+    }
+
+    #[tokio::test]
+    async fn connexion_rejette_un_mauvais_mot_de_passe() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "mauvais-mot-de-passe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn connexion_avec_erreur_de_stockage_retourne_500() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn connexion_rejette_un_identifiant_inconnu() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "fantome", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn connexion_rejette_des_champs_vides() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "", "mot_de_passe": "" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn me_sans_jeton_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", None, None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn me_avec_jeton_mal_forme_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some("pas-un-jwt"), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn me_avec_jeton_expire_est_refuse() {
+        let ctx = nouveau_contexte();
+        // Durée de vie négative : le jeton est expiré dès sa création.
+        let service_expire = JwtService::new(ctx.secret.clone(), -1);
+        let jeton = service_expire
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .unwrap();
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn me_avec_sub_non_uuid_est_refuse() {
+        let ctx = nouveau_contexte();
+        let jeton = forger_jeton(
+            &ctx,
+            Claims {
+                sub: "pas-un-uuid".into(),
+                pseudo: "alice".into(),
+                role: Role::Utilisateur,
+                exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
+            },
+        );
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn me_retourne_le_profil_courant() {
+        let ctx = nouveau_contexte();
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["id"], id.to_string());
+        assert_eq!(corps["pseudo"], "alice");
+    }
+
+    #[tokio::test]
+    async fn me_avec_erreur_de_stockage_retourne_500() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn me_apres_suppression_du_compte_est_introuvable() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+
+        // Le jeton reste cryptographiquement valide (il n'est pas révoqué
+        // — voir limites connues du README) : c'est la recherche en base
+        // qui doit maintenant échouer.
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_met_a_jour_chaque_champ() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["pseudo"], "alice2");
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "courriel": "alice2@example.com" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["courriel"], "alice2@example.com");
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe": "nouveau-mot-de-passe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+
+        // Le nouveau mot de passe doit désormais permettre la connexion.
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice2", "mot_de_passe": "nouveau-mot-de-passe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_sans_aucun_champ_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(corps["erreur"], "au moins un champ doit être fourni");
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_rejette_un_courriel_invalide() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "courriel": "pas-un-courriel" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_rejette_un_pseudo_deja_pris() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (_, jeton_bob) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton_bob),
+            Some(json!({ "pseudo": "alice" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_sans_jeton_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            None,
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn modifier_moi_apres_suppression_est_introuvable() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn supprimer_moi_sans_jeton_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", None, None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn supprimer_moi_deux_fois_echoue_la_seconde_fois() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn supprimer_moi_avec_erreur_de_stockage_retourne_500() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn routes_admin_refusees_a_un_utilisateur_normal() {
+        let ctx = nouveau_contexte();
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/{id}"),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id}"),
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            &format!("/api/users/{id}"),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id}/role"),
+            Some(&jeton),
+            Some(json!({ "role": "admin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn routes_admin_refusees_sans_jeton() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "GET", "/api/users", None, None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_liste_et_consulte_les_comptes() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) =
+            requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps.as_array().unwrap().len(), 2);
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["pseudo"], "alice");
+
+        let id_inconnu = Uuid::new_v4();
+        let (statut, _) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/{id_inconnu}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn admin_modifie_un_autre_compte() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (id_bob, _) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            Some(json!({ "courriel": "alice-modifiee@example.com" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["courriel"], "alice-modifiee@example.com");
+
+        // Aucun champ fourni.
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            Some(json!({})),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+
+        // Validation (pseudo trop court).
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            Some(json!({ "pseudo": "ab" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+
+        // Conflit : bob prend le pseudo d'alice.
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_bob}"),
+            Some(&jeton_admin),
+            Some(json!({ "pseudo": "alice" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::CONFLICT);
+
+        // Compte inexistant.
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{}", Uuid::new_v4()),
+            Some(&jeton_admin),
+            Some(json!({ "pseudo": "quelquun" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn admin_supprime_un_compte_et_change_un_role() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "moderateur" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["role"], "moderateur");
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{}/role", Uuid::new_v4()),
+            Some(&jeton_admin),
+            Some(json!({ "role": "admin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            &format!("/api/users/{id_alice}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn actions_admin_avec_erreur_de_stockage_retournent_500() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_cible, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/{id_cible}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_cible}"),
+            Some(&jeton_admin),
+            Some(json!({ "pseudo": "peu-importe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            &format!("/api/users/{id_cible}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_cible}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "admin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

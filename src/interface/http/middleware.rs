@@ -33,11 +33,16 @@ pub struct UtilisateurAuthentifie {
 impl FromRequestParts<AppState> for UtilisateurAuthentifie {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let TypedHeader(Authorization(porteur)) =
             TypedHeader::<Authorization<Bearer>>::from_request_parts(parts, state)
                 .await
-                .map_err(|_| AppError::NonAutorise("en-tête Authorization manquant ou invalide".into()))?;
+                .map_err(|_| {
+                    AppError::NonAutorise("en-tête Authorization manquant ou invalide".into())
+                })?;
 
         let claims = state.jwt_service.valider_token(porteur.token())?;
 

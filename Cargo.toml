@@ -1,6 +1,6 @@
 [package]
 name = "chatvardage-auth"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 # --- Dépendances -------------------------------------------------------
@@ -24,7 +24,7 @@ tokio = { version = "1", features = ["full"] }
 # Client PostgreSQL asynchrone. On utilise l'API "query builder" à
 # l'exécution (pas les macros query! qui exigent une DB disponible au
 # moment de la compilation) pour rester simple au départ.
-sqlx = { version = "0.7", features = [
+sqlx = { version = "0.8", features = [
     "runtime-tokio-rustls",
     "postgres",
     "uuid",
@@ -59,8 +59,11 @@ jsonwebtoken = "9"
 # d'environnement sont fournies directement par docker-compose).
 dotenvy = "0.15"
 
-# Middlewares HTTP génériques (CORS, logs des requêtes, timeout).
-tower = "0.4"
+# Middlewares HTTP génériques (CORS, logs des requêtes, timeout). `tower`
+# lui-même n'est jamais importé directement dans src/ (seulement via
+# tower-http/axum, qui l'embarquent déjà) : il n'est déclaré qu'en
+# dev-dependency ci-dessous, pour `tower::ServiceExt::oneshot` dans les
+# tests HTTP de bout en bout (voir interface/http/routes.rs).
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # Journalisation structurée (remplace les println! de debug).
@@ -72,3 +75,11 @@ thiserror = "1"
 
 # Validation simple des entrées (format courriel, longueur mot de passe...).
 validator = { version = "0.18", features = ["derive"] }
+
+[dev-dependencies]
+# `ServiceExt::oneshot` : envoie une requête HTTP directement au `Router`
+# axum dans les tests, sans ouvrir de vraie socket TCP (voir
+# interface/http/routes.rs).
+tower = { version = "0.4", features = ["util"] }
+# `Body::collect` pour lire le corps JSON des réponses de test.
+http-body-util = "0.1"

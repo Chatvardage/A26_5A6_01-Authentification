@@ -1,36 +1,62 @@
 # docker-compose.yml DE CE DÉPÔT = pour développer et démontrer le
-# service d'authentification SEUL, en isolation. Le dépôt "infra" de
-# l'équipe aura son propre docker-compose.yml qui assemble ce service
-# (comme image Docker) avec les autres services (salons, messages, etc.),
-# un Redis partagé et une vraie base PostgreSQL — ce fichier-ci n'a pas
-# besoin de connaître les autres services.
+# service d'authentification SEUL, en isolation, avec sa propre base
+# PostgreSQL de développement. Le dépôt "infra" de l'équipe a son propre
+# docker-compose.yml qui assemble ce service (comme image Docker) avec
+# les autres services (salons, messages, etc.), un Redis partagé et une
+# base PostgreSQL partagée — voir README, section "Intégration avec le
+# reste de l'équipe".
 #
-# Pourquoi pas de PostgreSQL ici ? Un autre service de l'équipe gère les
-# migrations (la création de la table `users`) — ce n'est plus la
-# responsabilité de ce dépôt. Pour pouvoir développer et tester sans
-# dépendre de ce service, ce compose lance l'API en "mode mock"
-# (USE_MOCK_DB=true, voir README section "Mode mock") : les comptes
-# vivent en mémoire, rien n'est persisté. Une fois la vraie base prête
-# (schéma créé par l'autre service), remplacer USE_MOCK_DB par "false" et
-# ajouter DATABASE_URL pointant vers cette base (la vôtre en local, ou
-# celle du dépôt infra) pour tester avec PostgreSQL.
+# PostgreSQL est la source de vérité (aucun mode mock/en mémoire, voir
+# énoncé du contrôle) : `docker compose up --build` démarre une base
+# PostgreSQL, applique les migrations Prisma (`npx prisma migrate
+# deploy`, exécuté par le conteneur `auth-api` à son démarrage — voir
+# Dockerfile), puis lance l'API.
 #
 # Utilisation :
 #   docker compose up --build
 #   -> API disponible sur http://localhost:3001
 #   -> curl http://localhost:3001/health
+#   -> arrêter : Ctrl+C puis `docker compose down`
+#      (ajouter `-v` pour aussi supprimer les données PostgreSQL — irréversible)
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatvardage-auth-db
+    environment:
+      POSTGRES_USER: chatvardage
+      POSTGRES_PASSWORD: chatvardage
+      POSTGRES_DB: chatvardage_auth
+    ports:
+      - "5432:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatvardage -d chatvardage_auth"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
   auth-api:
     build: .
     container_name: chatvardage-auth-api
     ports:
       - "3001:3001"
     environment:
-      USE_MOCK_DB: "true"
-      # DATABASE_URL: postgres://chatvardage:chatvardage@auth-db:5432/chatvardage_auth
+      # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
+      # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
+      # seul schéma ("public", le défaut PostgreSQL).
+      DATABASE_URL: postgresql://chatvardage:chatvardage@postgres:5432/chatvardage_auth
       JWT_SECRET: dev-secret-ne-pas-utiliser-en-production
       JWT_DUREE_DE_VIE_HEURES: "24"
       PORT: "3001"
       RUST_LOG: info
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  auth-db-data:

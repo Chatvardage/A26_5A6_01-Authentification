@@ -60,4 +60,14 @@ mod tests {
         let b = hacher_mot_de_passe("motdepasse123").unwrap();
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn un_hache_mal_forme_est_rejeté_sans_paniquer() {
+        // Ex. une donnée corrompue en base : ne doit jamais paniquer, ni
+        // être traité comme un mot de passe valide.
+        assert!(!verifier_mot_de_passe(
+            "motdepasse123",
+            "pas-un-hachage-argon2"
+        ));
+    }
 }

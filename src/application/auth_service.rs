@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use uuid::Uuid;
 use validator::Validate;
 
 use crate::domain::ports::{RepoError, UtilisateurRepositoryPort};
@@ -20,7 +21,10 @@ use crate::error::AppError;
 use crate::infrastructure::jwt::JwtService;
 use crate::infrastructure::mot_de_passe::{hacher_mot_de_passe, verifier_mot_de_passe};
 
-use super::dto::{AuthResponse, ConnexionRequest, InscriptionRequest};
+use super::dto::{
+    AuthResponse, ConnexionRequest, InscriptionRequest, ModifierProfilRequest,
+    ModifierUtilisateurRequest,
+};
 
 #[derive(Clone)]
 pub struct AuthService {
@@ -44,11 +48,11 @@ impl AuthService {
             .depot
             .creer(&requete.pseudo, &requete.courriel, &hache)
             .await
-            .map_err(mapper_erreur_creation)?;
+            .map_err(mapper_erreur_depot)?;
 
-        let jeton = self
-            .jwt
-            .generer_token(utilisateur.id, &utilisateur.pseudo, utilisateur.role())?;
+        let jeton =
+            self.jwt
+                .generer_token(utilisateur.id, &utilisateur.pseudo, utilisateur.role())?;
         Ok(AuthResponse {
             jeton,
             utilisateur: UtilisateurPublic::from(utilisateur),
@@ -74,19 +78,101 @@ impl AuthService {
             ));
         }
 
-        let jeton = self
-            .jwt
-            .generer_token(utilisateur.id, &utilisateur.pseudo, utilisateur.role())?;
+        let jeton =
+            self.jwt
+                .generer_token(utilisateur.id, &utilisateur.pseudo, utilisateur.role())?;
         Ok(AuthResponse {
             jeton,
             utilisateur: UtilisateurPublic::from(utilisateur),
         })
     }
+
+    /// `PATCH /api/auth/me` : modifie son propre profil (pseudo, courriel
+    /// et/ou mot de passe — tous optionnels, au moins un requis).
+    pub async fn modifier_profil(
+        &self,
+        id: Uuid,
+        requete: ModifierProfilRequest,
+    ) -> Result<UtilisateurPublic, AppError> {
+        requete.validate().map_err(AppError::Validation)?;
+        if requete.pseudo.is_none() && requete.courriel.is_none() && requete.mot_de_passe.is_none()
+        {
+            return Err(AppError::Requete(
+                "au moins un champ doit être fourni".into(),
+            ));
+        }
+
+        let hache_mot_de_passe = requete
+            .mot_de_passe
+            .as_deref()
+            .map(hacher_mot_de_passe)
+            .transpose()?;
+
+        let utilisateur = self
+            .depot
+            .modifier(
+                id,
+                requete.pseudo.as_deref(),
+                requete.courriel.as_deref(),
+                hache_mot_de_passe.as_deref(),
+            )
+            .await
+            .map_err(mapper_erreur_depot)?
+            .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+        Ok(UtilisateurPublic::from(utilisateur))
+    }
+
+    /// `DELETE /api/auth/me` : supprime son propre compte.
+    pub async fn supprimer_compte(&self, id: Uuid) -> Result<(), AppError> {
+        let supprime = self
+            .depot
+            .supprimer(id)
+            .await
+            .map_err(|e| AppError::Interne(e.to_string()))?;
+
+        if supprime {
+            Ok(())
+        } else {
+            Err(AppError::Introuvable("utilisateur introuvable".into()))
+        }
+    }
+
+    /// `PATCH /api/users/{id}` (admin) : modifie le pseudo et/ou le
+    /// courriel d'un autre compte — jamais le mot de passe ni le rôle
+    /// (voir `changer_role` dans `utilisateurs_controller.rs` pour le
+    /// rôle).
+    pub async fn modifier_utilisateur(
+        &self,
+        id: Uuid,
+        requete: ModifierUtilisateurRequest,
+    ) -> Result<UtilisateurPublic, AppError> {
+        requete.validate().map_err(AppError::Validation)?;
+        if requete.pseudo.is_none() && requete.courriel.is_none() {
+            return Err(AppError::Requete(
+                "au moins un champ doit être fourni".into(),
+            ));
+        }
+
+        let utilisateur = self
+            .depot
+            .modifier(
+                id,
+                requete.pseudo.as_deref(),
+                requete.courriel.as_deref(),
+                None,
+            )
+            .await
+            .map_err(mapper_erreur_depot)?
+            .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+        Ok(UtilisateurPublic::from(utilisateur))
+    }
 }
 
 /// Traduit les erreurs de stockage (ex. pseudo/courriel déjà pris) en
 /// erreur applicative compréhensible pour le client HTTP.
-fn mapper_erreur_creation(e: RepoError) -> AppError {
+fn mapper_erreur_depot(e: RepoError) -> AppError {
     match e {
         RepoError::Conflit => AppError::Conflit("ce pseudo ou ce courriel est déjà utilisé".into()),
         RepoError::Interne(msg) => AppError::Interne(msg),

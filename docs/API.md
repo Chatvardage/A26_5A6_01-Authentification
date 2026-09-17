@@ -19,6 +19,35 @@ Les routes marquées 🔒👑 exigent en plus que l'utilisateur ait le rôle `ad
 
 ---
 
+## Permissions — qui peut faire quoi
+
+Trois rôles existent (`admin`, `moderateur`, `utilisateur` — voir
+`src/domain/utilisateur.rs`). Un `utilisateur` et un `moderateur` ont
+exactement les mêmes droits **sur ce service** : gérer leur propre compte,
+rien d'autre. Le rôle `moderateur` donne des droits supplémentaires
+ailleurs dans l'architecture (modération des salons/messages), pas ici —
+à confirmer/ajuster avec l'équipe si le panneau d'administration doit
+finalement distinguer les deux.
+
+| Action | `utilisateur` / `moderateur` | `admin` |
+|--------|:---:|:---:|
+| Créer un compte (inscription) | ✅ (le sien, `/register`) | ✅ (le sien, `/register`) |
+| Lire son propre profil | ✅ `GET /api/auth/me` | ✅ `GET /api/auth/me` |
+| Lire le profil d'un autre utilisateur | ❌ | ✅ `GET /api/users/{id}` |
+| Lister tous les comptes | ❌ | ✅ `GET /api/users` |
+| Modifier son propre profil (pseudo/courriel/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
+| Modifier le profil d'un autre utilisateur | ❌ | ✅ `PATCH /api/users/{id}` |
+| Changer le rôle d'un compte | ❌ (pas même le sien) | ✅ `PATCH /api/users/{id}/role` |
+| Supprimer son propre compte | ✅ `DELETE /api/auth/me` | ✅ `DELETE /api/auth/me` |
+| Supprimer le compte d'un autre utilisateur | ❌ | ✅ `DELETE /api/users/{id}` |
+
+Un utilisateur ne peut jamais changer son propre rôle (ni celui de
+personne d'autre) — seul un `admin`, via `PATCH /api/users/{id}/role`,
+le peut. C'est volontaire : sinon n'importe quel compte pourrait
+s'auto-promouvoir `admin`.
+
+---
+
 ## Format des erreurs
 
 Toute erreur renvoie un corps de la forme :
@@ -47,7 +76,11 @@ docker-compose).
 
 ---
 
-## Authentification (`/api/auth`)
+## Authentification et compte personnel (`/api/auth`)
+
+Ces routes couvrent la création et la gestion **de son propre compte** —
+accessibles à tous les rôles de la même façon (voir
+[Permissions](#permissions--qui-peut-faire-quoi)).
 
 ### POST /api/auth/register
 
@@ -81,7 +114,8 @@ inscription, pas besoin d'un second appel à `/login`).
     "pseudo": "alice",
     "courriel": "alice@example.com",
     "role": "utilisateur",
-    "cree_le": "2026-09-10T12:00:00Z"
+    "cree_le": "2026-09-10T12:00:00Z",
+    "modifie_le": "2026-09-10T12:00:00Z"
   }
 }
 ```
@@ -126,32 +160,120 @@ redemander le mot de passe.
   "pseudo": "alice",
   "courriel": "alice@example.com",
   "role": "utilisateur",
-  "cree_le": "2026-09-10T12:00:00Z"
+  "cree_le": "2026-09-10T12:00:00Z",
+  "modifie_le": "2026-09-10T12:00:00Z"
 }
 ```
 
-**Erreurs** : `401` (jeton manquant, invalide ou expiré).
+**Erreurs** : `401` (jeton manquant, invalide ou expiré), `404` (le
+compte du jeton n'existe plus — voir note sur `DELETE /api/auth/me`
+ci-dessous).
+
+---
+
+### PATCH /api/auth/me 🔒
+
+Modifie son **propre** compte (pseudo, courriel et/ou mot de passe).
+Accessible à tous les rôles — un utilisateur ou modérateur peut ainsi
+mettre à jour son profil sans passer par un admin. Ne permet pas de
+changer son propre rôle (voir `PATCH /api/users/{id}/role`, réservé aux
+admins).
+
+**Corps de la requête** (tous les champs optionnels, au moins un requis)
+
+```json
+{
+  "pseudo": "alice2",
+  "courriel": "alice2@example.com",
+  "mot_de_passe": "nouveaumotdepasse123"
+}
+```
+
+| Champ | Règle |
+|-------|-------|
+| pseudo | optionnel, 3 à 20 caractères si fourni |
+| courriel | optionnel, format courriel valide si fourni |
+| mot_de_passe | optionnel, 8 caractères minimum si fourni (rehaché avec Argon2) |
+
+**Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
+
+**Erreurs** : `400` (validation, ou aucun champ fourni), `401` (jeton manquant/invalide), `404` (compte déjà supprimé), `409` (pseudo ou courriel déjà pris par un autre compte).
+
+---
+
+### DELETE /api/auth/me 🔒
+
+Supprime son **propre** compte. Accessible à tous les rôles, y compris
+`admin` (un admin qui veut fermer son propre compte n'a pas besoin d'en
+demander un autre — voir `DELETE /api/users/{id}` pour la suppression du
+compte de quelqu'un d'autre).
+
+**Réponse `204`** (pas de corps) si supprimé.
+
+**Erreurs** : `401` (jeton manquant/invalide), `404` (compte déjà
+supprimé — le jeton reste cryptographiquement valide jusqu'à son
+expiration même après suppression du compte, voir README section
+« Limites connues »).
 
 ---
 
 ## Gestion des utilisateurs — panneau d'administration (`/api/users`)
 
+Réservé aux comptes `admin` : gestion de **n'importe quel** compte, pas
+seulement le sien (voir [Permissions](#permissions--qui-peut-faire-quoi)).
+
 ### GET /api/users 🔒👑
 
 Liste tous les comptes inscrits.
 
-**Réponse `200`** : tableau d'objets utilisateur (même forme que ci-dessus).
+**Réponse `200`** : tableau d'objets utilisateur (même forme que `GET /api/auth/me`).
+
+---
+
+### GET /api/users/{id} 🔒👑
+
+Retourne un compte précis par son id.
+
+**Réponse `200`** : l'objet utilisateur (même forme que `GET /api/auth/me`).
+
+**Erreurs** : `404` si l'id n'existe pas.
+
+---
+
+### PATCH /api/users/{id} 🔒👑
+
+Modifie le pseudo et/ou le courriel d'un autre compte (équivalent
+administrateur de `PATCH /api/auth/me`, sans exiger le mot de passe
+actuel). Pour changer le mot de passe d'un compte, ou pour changer un
+rôle, voir les routes dédiées ci-dessous.
+
+**Corps de la requête** (au moins un champ requis)
+
+```json
+{ "pseudo": "alice2", "courriel": "alice2@example.com" }
+```
+
+**Réponse `200`** : l'objet utilisateur mis à jour.
+
+**Erreurs** : `400` (validation, ou aucun champ fourni), `404` (id introuvable), `409` (pseudo ou courriel déjà pris).
+
+---
 
 ### DELETE /api/users/{id} 🔒👑
 
-Supprime un compte.
+Supprime le compte de quelqu'un d'autre.
 
 **Réponse `204`** (pas de corps) si supprimé.
+
 **Erreurs** : `404` si l'id n'existe pas.
+
+---
 
 ### PATCH /api/users/{id}/role 🔒👑
 
-Change le rôle d'un utilisateur.
+Change le rôle d'un utilisateur. Seule route qui permet de modifier un
+rôle — aucun utilisateur ne peut changer le sien (voir
+[Permissions](#permissions--qui-peut-faire-quoi)).
 
 **Corps de la requête**
 
@@ -162,7 +284,8 @@ Change le rôle d'un utilisateur.
 Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
 
 **Réponse `200`** : l'objet utilisateur mis à jour.
-**Erreurs** : `404` si l'id n'existe pas.
+
+**Erreurs** : `400` (valeur de rôle invalide), `404` si l'id n'existe pas.
 
 ---
 
@@ -175,9 +298,10 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
   via `JWT_DUREE_DE_VIE_HEURES`).
 - `identifiant` de connexion accepte courriel OU pseudo, comme demandé dans
   l'énoncé.
-- La base de données PostgreSQL est la source de vérité en mode réel
-  (`USE_MOCK_DB=false`) — voir le schéma attendu dans le README. En mode
-  mock (`USE_MOCK_DB=true`, activé par défaut pour développer sans
-  attendre le service qui gère les migrations), les mêmes endpoints
-  fonctionnent identiquement, mais les comptes vivent en mémoire et sont
-  perdus au redémarrage.
+- PostgreSQL est la source de vérité — il n'y a pas de mode mock/en
+  mémoire dans ce service. Le schéma de la table `utilisateurs` est géré
+  par les migrations Prisma de ce dépôt (voir README, section
+  « Migrations de la base de données (Prisma) »).
+- Toutes les routes ci-dessus sont codées et testées (voir README,
+  section « Lancer les tests ») — y compris `PATCH`/`DELETE /api/auth/me`
+  et `GET`/`PATCH /api/users/{id}`.

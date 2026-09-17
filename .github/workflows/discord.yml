@@ -1,0 +1,72 @@
+name: Discord Notifications
+
+on:
+  push:
+    branches:
+      - develop
+
+  pull_request:
+    branches:
+      - develop
+    types:
+      - opened
+      - closed
+      - reopened
+
+jobs:
+  notify-discord:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Notification Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          ACTOR: ${{ github.actor }}
+          COMMIT_URL: ${{ github.event.head_commit.url }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "::warning::DISCORD_WEBHOOK is not configured."
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            MESSAGE=$(cat <<EOF
+          🚀 **Nouveau push sur develop !**
+
+          👤 Auteur: $ACTOR
+          📁 Repository: $GITHUB_REPOSITORY
+          💬 Commit: $COMMIT_MSG
+          🔗 $COMMIT_URL
+          EOF
+          )
+
+          elif [ "$PR_MERGED" = "true" ]; then
+            MESSAGE=$(cat <<EOF
+          ✅ **Pull Request fusionnée dans develop !**
+
+          📌 Titre: $PR_TITLE
+          👤 Auteur: $ACTOR
+          🔗 $PR_URL
+          EOF
+          )
+
+          else
+            MESSAGE=$(cat <<EOF
+          🔀 **Pull Request**
+
+          📌 Titre: $PR_TITLE
+          👤 Auteur: $ACTOR
+          🔗 $PR_URL
+          EOF
+          )
+          fi
+
+          curl --fail --silent --show-error \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg content "$MESSAGE" '{content: $content}')" \
+            "$DISCORD_WEBHOOK"

@@ -18,3 +18,16 @@ pub async fn connect(database_url: &str) -> Result<PgPool, sqlx::Error> {
         .connect(database_url)
         .await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn echoue_si_aucun_serveur_necoute_sur_lurl() {
+        // Port 1 : réservé, rien n'y écoute — connexion refusée
+        // immédiatement, pas besoin d'une vraie base pour ce test.
+        let resultat = connect("postgres://user:pass@127.0.0.1:1/inexistant").await;
+        assert!(resultat.is_err());
+    }
+}

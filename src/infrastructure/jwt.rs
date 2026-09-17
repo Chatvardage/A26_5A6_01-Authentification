@@ -44,7 +44,12 @@ impl JwtService {
         }
     }
 
-    pub fn generer_token(&self, id_utilisateur: Uuid, pseudo: &str, role: Role) -> Result<String, AppError> {
+    pub fn generer_token(
+        &self,
+        id_utilisateur: Uuid,
+        pseudo: &str,
+        role: Role,
+    ) -> Result<String, AppError> {
         let expiration = Utc::now()
             .checked_add_signed(Duration::hours(self.duree_de_vie_heures))
             .expect("le calcul de l'expiration ne devrait jamais déborder")
@@ -73,5 +78,54 @@ impl JwtService {
         )
         .map(|data| data.claims)
         .map_err(|_| AppError::NonAutorise("jeton invalide ou expiré".into()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn genere_puis_valide_un_jeton() {
+        let service = JwtService::new("secret".into(), 24);
+        let id = Uuid::new_v4();
+
+        let jeton = service
+            .generer_token(id, "alice", Role::Utilisateur)
+            .unwrap();
+        let claims = service.valider_token(&jeton).unwrap();
+
+        assert_eq!(claims.sub, id.to_string());
+        assert_eq!(claims.pseudo, "alice");
+        assert_eq!(claims.role, Role::Utilisateur);
+    }
+
+    #[test]
+    fn rejette_un_jeton_expire() {
+        // Durée de vie négative : le jeton est déjà expiré au moment où
+        // il est émis.
+        let service = JwtService::new("secret".into(), -1);
+        let jeton = service
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .unwrap();
+
+        assert!(service.valider_token(&jeton).is_err());
+    }
+
+    #[test]
+    fn rejette_un_jeton_signe_avec_un_autre_secret() {
+        let service_a = JwtService::new("secret-a".into(), 24);
+        let service_b = JwtService::new("secret-b".into(), 24);
+        let jeton = service_a
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .unwrap();
+
+        assert!(service_b.valider_token(&jeton).is_err());
+    }
+
+    #[test]
+    fn rejette_un_jeton_mal_forme() {
+        let service = JwtService::new("secret".into(), 24);
+        assert!(service.valider_token("pas-un-jwt").is_err());
     }
 }

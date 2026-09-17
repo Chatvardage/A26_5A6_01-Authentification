@@ -12,10 +12,9 @@ use crate::infrastructure::jwt::JwtService;
 #[derive(Clone)]
 pub struct AppState {
     pub auth_service: AuthService,
-    /// `dyn UtilisateurRepositoryPort` : selon `USE_MOCK_DB`, ceci
-    /// pointe soit vers `PgUtilisateurRepository`, soit vers
-    /// `MockUtilisateurRepository` (voir `main.rs`) — les contrôleurs ne
-    /// font pas la différence.
+    /// `dyn UtilisateurRepositoryPort` : `main.rs` y injecte
+    /// `PgUtilisateurRepository` au démarrage — les contrôleurs ne
+    /// dépendent que du trait, jamais de PostgreSQL directement.
     pub depot_utilisateurs: Arc<dyn UtilisateurRepositoryPort>,
     pub jwt_service: Arc<JwtService>,
 }

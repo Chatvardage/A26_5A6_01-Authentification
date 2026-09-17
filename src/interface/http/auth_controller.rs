@@ -2,10 +2,11 @@
 //! il extrait le JSON, délègue à `AuthService`, et laisse `AppError`
 //! (voir error.rs) gérer la mise en forme des erreurs.
 
-use axum::{extract::State, Json};
+use axum::{extract::State, http::StatusCode, Json};
 
-use crate::application::dto::{AuthResponse, ConnexionRequest, InscriptionRequest};
-use crate::domain::ports::UtilisateurRepositoryPort; // requis pour appeler les méthodes du trait sur state.depot_utilisateurs
+use crate::application::dto::{
+    AuthResponse, ConnexionRequest, InscriptionRequest, ModifierProfilRequest,
+};
 use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -45,4 +46,30 @@ pub async fn me(
         .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
 
     Ok(Json(UtilisateurPublic::from(utilisateur)))
+}
+
+/// PATCH /api/auth/me — modifie son propre profil (pseudo, courriel
+/// et/ou mot de passe).
+pub async fn modifier_moi(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+    Json(requete): Json<ModifierProfilRequest>,
+) -> Result<Json<UtilisateurPublic>, AppError> {
+    let utilisateur = state
+        .auth_service
+        .modifier_profil(session.id_utilisateur, requete)
+        .await?;
+    Ok(Json(utilisateur))
+}
+
+/// DELETE /api/auth/me — supprime son propre compte.
+pub async fn supprimer_moi(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+) -> Result<StatusCode, AppError> {
+    state
+        .auth_service
+        .supprimer_compte(session.id_utilisateur)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }

@@ -1,10 +1,11 @@
-# chatvardage-auth
+# Chatvardage Authentification
+
 
 Service d'authentification et de gestion des comptes pour **ChatVardage**,
 écrit en Rust. Ce dépôt correspond à la portion « authentification »
 (courriel/pseudo + mot de passe, rôles) du **Contrôle 2** du cours
 420-5A6-ST — il fait partie d'une architecture **multiservice** : le
-client desktop (dépôt `A26_5A6_01-chatvardage`, Contrôle 1) et un dépôt
+client desktop (dépôt `A26_5A6_01-Frontend`, Contrôle 1) et un dépôt
 `infra` séparé (docker-compose global de l'équipe) vivent ailleurs.
 
 > Convention de nommage : toutes les données (champs JSON, colonnes de
@@ -22,17 +23,16 @@ client desktop (dépôt `A26_5A6_01-chatvardage`, Contrôle 1) et un dépôt
 - [Objectif de ce service](#objectif-de-ce-service)
 - [Choix techniques](#choix-techniques-et-justification)
 - [Architecture du service](#architecture-du-service)
-- [Mode mock (développer sans PostgreSQL)](#mode-mock-développer-sans-postgresql)
-- [Schéma de données attendu](#schéma-de-données-attendu)
+- [Migrations de la base de données (Prisma)](#migrations-de-la-base-de-données-prisma)
 - [Prérequis](#prérequis)
 - [Installation et lancement](#installation-et-lancement)
 - [Variables d'environnement](#variables-denvironnement)
 - [Vérifier que ça fonctionne](#vérifier-que-ça-fonctionne)
+- [Lancer les tests](#lancer-les-tests)
 - [Endpoints de l'API](#endpoints-de-lapi)
 - [Intégration avec le reste de l'équipe](#intégration-avec-le-reste-de-léquipe)
 - [Versions (tags Git)](#versions-tags-git)
 - [Limites connues et pistes d'amélioration](#limites-connues-et-pistes-damélioration)
-- [Pour aller plus loin (je débute en Rust)](#pour-aller-plus-loin-je-débute-en-rust)
 
 ## Objectif de ce service
 
@@ -49,11 +49,16 @@ exigé par l'énoncé). Ce service n'a pas besoin de Redis : Redis sert au
 service de messagerie temps réel pour diffuser les événements, pas à
 l'authentification elle-même.
 
-**Ce service ne crée pas la table `utilisateurs` lui-même** : un autre
-service de l'équipe gère les migrations de la base de données. Voir
-[Schéma de données attendu](#schéma-de-données-attendu) pour ce que ce
-service suppose déjà présent, et [Mode mock](#mode-mock-développer-sans-postgresql)
-pour développer en attendant que ce soit prêt.
+**Ce service possède et gère la table `utilisateurs`** : le schéma est
+défini et versionné avec des migrations Prisma dans ce dépôt (voir
+[Migrations de la base de données (Prisma)](#migrations-de-la-base-de-données-prisma)).
+Prisma sert uniquement à définir le schéma et à exécuter les migrations —
+l'API elle-même continue d'interroger PostgreSQL avec SQLx au runtime (voir
+[Choix techniques](#choix-techniques-et-justification)) ; aucun client
+Prisma n'est utilisé dans le code Rust. Il n'y a **pas de mode mock/en
+mémoire** : une base PostgreSQL migrée est requise dès le développement
+local (voir [Migrations de la base de données (Prisma)](#migrations-de-la-base-de-données-prisma)
+et [Installation et lancement](#installation-et-lancement)).
 
 ## Choix techniques et justification
 
@@ -62,10 +67,11 @@ pour développer en attendant que ce soit prêt.
 | **Rust** | Imposé par la répartition des tâches de l'équipe (voir énoncé : "vous êtes libres de choisir les technologies"). |
 | **Axum** | Framework web asynchrone, API simple, bonne documentation, très utilisé pour des services HTTP en Rust — un bon choix pour un premier projet Rust. |
 | **PostgreSQL + SQLx** | Base relationnelle robuste pour des données structurées (comptes, rôles). SQLx est asynchrone (compatible avec Axum/Tokio) et n'exige pas d'ORM lourd. |
-| **Port + Mock** (`UtilisateurRepositoryPort`) | Le code métier ne dépend que d'une interface (`domain::ports::UtilisateurRepositoryPort`), pas directement de PostgreSQL — même principe que `ChatGateway`/`MockGateway` côté frontend. Permet de développer avec un dépôt en mémoire (`USE_MOCK_DB=true`) sans attendre le service qui gère les migrations. |
+| **Prisma (migrations uniquement)** | Standardise la gestion des migrations de schéma avec le reste de l'équipe (le Room-Service l'utilise aussi) — la CLI Prisma est indépendante du langage du service qui l'utilise. Aucun client Prisma généré n'est utilisé au runtime : SQLx reste le seul point d'accès aux données depuis le code Rust. |
+| **Port** (`UtilisateurRepositoryPort`) | Le code métier ne dépend que d'une interface (`domain::ports::UtilisateurRepositoryPort`), pas directement de PostgreSQL — même principe que `ChatGateway` côté frontend. Une seule implémentation en production, `PgUtilisateurRepository` (SQLx) ; il n'y a pas de mode mock exposé à l'exécution. Un second dépôt en mémoire (`FakeUtilisateurRepository`) existe, mais uniquement compilé en mode test (`#[cfg(test)]`) pour les tests HTTP de bout en bout — voir [Lancer les tests](#lancer-les-tests). |
 | **Argon2** | Algorithme de hachage de mot de passe recommandé actuellement (résiste mieux aux attaques par GPU que bcrypt/MD5/SHA simple). |
 | **JWT (jsonwebtoken)** | Authentification "sans état" (stateless) : chaque requête porte son propre jeton signé, pas besoin de stocker les sessions côté serveur — plus simple à faire évoluer vers plusieurs instances de l'API. |
-| **Docker multi-stage** | L'image finale ne contient que le binaire compilé (quelques Mo), pas la chaîne de compilation Rust (~1,5 Go). |
+| **Docker multi-stage** | Une étape compile le binaire Rust, une autre installe la CLI Prisma (Node.js, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate` ; l'image finale (basée sur `node:20-bookworm-slim`) embarque le binaire Rust compilé, Node.js et `prisma/` pour exécuter `npx prisma migrate deploy` au démarrage avant de lancer le binaire — même séquence que les microservices Node de l'équipe (voir [Installation et lancement](#installation-et-lancement)), adaptée à un runtime Rust. |
 
 ## Architecture du service
 
@@ -87,17 +93,15 @@ src/
 │   └── ports.rs           #   UtilisateurRepositoryPort : ce dont le métier a
 │                           #   besoin (pas comment c'est implémenté — voir
 │                           #   infrastructure/)
-├── infrastructure/      # Implémentations techniques : Postgres, mock, Argon2, JWT
+├── infrastructure/      # Implémentations techniques : Postgres, Argon2, JWT
 │   ├── db.rs
 │   ├── pg_utilisateur_repository.rs    # implémente le port avec PostgreSQL
-│   ├── mock_utilisateur_repository.rs  # implémente le port en mémoire
 │   ├── mot_de_passe.rs
 │   └── jwt.rs
 ├── config.rs            # Lecture des variables d'environnement
 ├── state.rs             # État partagé injecté dans les contrôleurs
-└── main.rs               # Point d'entrée : choisit pg_utilisateur_repository
-                           #   ou mock_utilisateur_repository selon USE_MOCK_DB,
-                           #   assemble tout, démarre le serveur
+└── main.rs               # Point d'entrée : assemble PgUtilisateurRepository
+                           #   et les services, démarre le serveur
 ```
 
 Schéma simplifié du flux d'une requête protégée :
@@ -111,11 +115,10 @@ interface/http (route + middleware d'auth)
 application (auth_service : logique métier)
    ▼
 domain::ports::UtilisateurRepositoryPort (interface)
-   ▼                                   ▼
-infrastructure::PgUtilisateurRepository   infrastructure::MockUtilisateurRepository
-   ▼                                   ▼
-   PostgreSQL                          mémoire (RAM)
-   (USE_MOCK_DB=false)                 (USE_MOCK_DB=true)
+   ▼
+infrastructure::PgUtilisateurRepository
+   ▼
+   PostgreSQL (schéma géré par les migrations Prisma de ce dépôt)
 ```
 
 Un schéma d'architecture **global** (client desktop + ce service + les
@@ -123,40 +126,54 @@ autres services + conteneurs) est de la responsabilité collective de
 l'équipe et doit vivre dans le dépôt `infra` — ce README documente
 uniquement l'architecture interne de ce service.
 
-## Mode mock (développer sans PostgreSQL)
+## Migrations de la base de données (Prisma)
 
-Un autre service de l'équipe gère les migrations (la création de la table
-`utilisateurs`). Plutôt que d'attendre que ce soit prêt, ce service peut
-tourner avec `MockUtilisateurRepository` : un dépôt d'utilisateurs **en
-mémoire**, avec exactement le même comportement que la vraie base côté API
-(mêmes routes, mêmes codes d'erreur, ex. `409` si le pseudo est déjà pris)
-— seule la donnée change d'endroit. C'est le même principe que
-`MockGateway` dans le dépôt desktop.
+Ce service possède la source de vérité du schéma de la table
+`utilisateurs`, défini dans [`prisma/schema.prisma`](prisma/schema.prisma)
+et versionné avec des migrations dans `prisma/migrations/` — même
+mécanisme que le Room-Service de l'équipe (voir son `AGENTS.md`). Prisma
+ne sert **qu'à** définir le schéma et exécuter les migrations : le code
+Rust (`src/infrastructure/pg_utilisateur_repository.rs`) continue
+d'utiliser SQLx pour lire/écrire dans PostgreSQL — aucun client Prisma
+n'est appelé au runtime.
 
-Activé par défaut dans `docker-compose.yml` et dans `.env.example` :
+Dans l'environnement d'équipe (dépôt `infra`), la base et l'utilisateur
+PostgreSQL de ce service (`chatvardage_auth` / `auth_service`) sont
+provisionnés par `infra` lui-même — voir le guide Docker/Prisma de
+l'équipe. `infra` crée la base et le rôle, **mais pas les tables** :
+c'est `npx prisma migrate deploy`, exécuté par **ce** dépôt au démarrage
+de son conteneur, qui crée la table `utilisateurs`.
 
-```bash
-USE_MOCK_DB=true
+```prisma
+model Utilisateur {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pseudo             String   @unique
+  courriel           String   @unique
+  mot_de_passe_hache String
+  role               String   @default("utilisateur")
+  cree_le            DateTime @default(now()) @db.Timestamptz
+  modifie_le         DateTime @default(now()) @db.Timestamptz
+
+  @@map("utilisateurs")
+}
 ```
 
-Avec ce réglage, `DATABASE_URL` n'est même pas nécessaire — le service ne
-tente aucune connexion à PostgreSQL.
+Deux détails délibérément différents des exemples Prisma habituels (voir
+les commentaires dans `prisma/schema.prisma` pour le détail) :
 
-⚠️ **Limites du mode mock**, à garder en tête :
-- Rien n'est persisté : un redémarrage du service efface tous les comptes.
-- Une seule instance : deux instances du service en mode mock ne
-  partagent pas leurs données.
-- **Ne pas utiliser ce mode pour la démonstration finale du contrôle** —
-  l'énoncé exige explicitement que PostgreSQL soit la source de vérité.
-  Dès que la vraie base est prête, repasser à `USE_MOCK_DB=false` (ou
-  retirer la ligne) et fournir `DATABASE_URL`.
-
-## Schéma de données attendu
-
-Ce service ne crée pas la table `utilisateurs` (voir plus haut) : il
-suppose qu'elle existe déjà, avec au minimum ces colonnes (voir les
-requêtes SQL dans `src/infrastructure/pg_utilisateur_repository.rs`, qui
-en sont la source de vérité exacte) :
+- `dbgenerated("gen_random_uuid()")`, pas `@default(uuid())` : ce dernier
+  génère l'UUID côté client Prisma — jamais appelé au runtime ici — donc
+  la colonne n'aurait aucune valeur par défaut côté PostgreSQL et
+  l'`INSERT` de SQLx (qui ne fournit pas `id`) échouerait. `gen_random_uuid()`
+  est une fonction native de PostgreSQL depuis la version 13.
+- `@db.Timestamptz` sur les deux colonnes de date : le code Rust les lit
+  en `chrono::DateTime<Utc>` (type PostgreSQL `timestamptz`), pas
+  `NaiveDateTime` (`timestamp`, le défaut Prisma sans cette annotation) —
+  sans elle, SQLx échouerait au décodage à l'exécution. Pas de
+  `@updatedAt` sur `modifie_le` non plus, pour la même raison que
+  `@default(uuid())` : c'est le client Prisma qui l'appliquerait, jamais
+  utilisé ici — `pg_utilisateur_repository.rs` met à jour cette colonne
+  explicitement (`SET modifie_le = now()`) à chaque `UPDATE`.
 
 | Colonne | Type | Contraintes |
 |---------|------|-------------|
@@ -168,18 +185,49 @@ en sont la source de vérité exacte) :
 | `cree_le` | horodatage avec fuseau | non nul |
 | `modifie_le` | horodatage avec fuseau | non nul |
 
-À partager avec la personne/le service qui gère les migrations, pour que
-son schéma corresponde à ce que ce service attend.
+Ces colonnes doivent rester synchronisées avec les requêtes SQL de
+`src/infrastructure/pg_utilisateur_repository.rs` : toute modification du
+schéma Prisma doit être répercutée dans ce fichier (et vice-versa), Prisma
+ne générant pas le code Rust.
+
+Après une modification de `prisma/schema.prisma` :
+
+```bash
+npx prisma generate
+npx prisma migrate dev --name <nom_de_la_migration>
+```
+
+Ne jamais modifier une migration déjà appliquée pour masquer un
+changement — créer une nouvelle migration.
+
+Dans Docker/déploiement, appliquer les migrations avec :
+
+```bash
+npx prisma migrate deploy
+```
+
+⚠️ Prisma n'est utilisé ici que comme outil de migration (CLI Node.js) —
+il ne remplace pas SQLx et n'est pas une dépendance du binaire Rust.
 
 ## Prérequis
 
-**Rien à installer localement à part Docker** (conforme à la consigne du
-contrôle). Pour développer/apprendre en dehors de Docker, il faut en plus :
+**Rien à installer localement pour faire tourner le service** à part
+Docker (conforme à la consigne du contrôle) — les migrations Prisma
+peuvent aussi être appliquées dans un conteneur (voir
+[Migrations de la base de données (Prisma)](#migrations-de-la-base-de-données-prisma)).
+Pour développer/apprendre en dehors de Docker, ou pour créer/modifier une
+migration Prisma en local, il faut en plus :
 
 - [Rust](https://www.rust-lang.org/tools/install), **version 1.85 ou plus
   récente** — installe `cargo` et `rustc`. Vérifier avec `rustc --version` ;
   si c'est plus vieux, lancer `rustup update stable` (voir dépannage
   ci-dessous si `rustup` n'est pas installé).
+- [Node.js](https://nodejs.org/) (version LTS) et npm — pour développer
+  ou modifier une migration en local (`npx prisma migrate dev`). **Pas
+  requis pour lancer le service avec Docker** : l'image finale embarque
+  déjà Node.js et exécute `npx prisma migrate deploy` elle-même au
+  démarrage du conteneur (voir Dockerfile) ; le binaire Rust lui-même
+  n'appelle jamais de client Prisma, seul le CLI (Node.js) sert à migrer.
 - [Docker](https://www.docker.com/) et Docker Compose (v2, la commande
   `docker compose`, pas `docker-compose`).
 
@@ -200,31 +248,58 @@ contrôle). Pour développer/apprendre en dehors de Docker, il faut en plus :
 
 ```bash
 git clone <url-de-ce-dépôt>
-cd chatvardage-auth
+cd A26_5A6_01-Authentification
 docker compose up --build
 ```
 
-Cela démarre le conteneur `auth-api` sur `http://localhost:3001`, **en mode
-mock** par défaut (voir [Mode mock](#mode-mock-développer-sans-postgresql)) —
-aucune base de données à installer ou attendre. Pour tester avec une vraie
-base PostgreSQL, voir cette même section.
+Ce `docker-compose.yml` sert à développer/tester **ce service seul**, avec
+sa propre base PostgreSQL de développement. Il démarre le conteneur
+`auth-api` sur `http://localhost:3001` en trois étapes automatiques (voir
+`Dockerfile`) :
 
-Pour arrêter : `Ctrl+C` puis `docker compose down`.
+1. build de l'image : compilation du binaire Rust **et** `npx prisma generate` ;
+2. démarrage du conteneur : `npx prisma migrate deploy` (crée/met à jour la table `utilisateurs`) ;
+3. lancement du binaire `chatvardage-auth`.
 
-### En local, sans Docker (pour développer plus vite pendant que tu apprends Rust)
+Aucune installation manuelle de PostgreSQL ni commande Prisma séparée
+n'est nécessaire pour cette utilisation en solo.
 
-```bash
-# 1. Copier la config d'exemple (USE_MOCK_DB=true par défaut : pas besoin
-#    de base de données pour cette étape)
-cp .env.example .env
+Dans l'environnement d'équipe complet (dépôt `infra`), ce service n'a pas
+son propre PostgreSQL : `infra` démarre un PostgreSQL **partagé** (service
+Docker `postgres`) et crée la base `chatvardage_auth` + l'utilisateur
+`auth_service`. Ce service est alors lancé comme un bloc du
+`docker-compose.yml` d'`infra`, avec un `DATABASE_URL` du type :
 
-# 2. Compiler et lancer — cargo télécharge les dépendances la première fois
-cargo run
+```
+postgresql://auth_service:auth_service_dev@postgres:5432/chatvardage_auth
 ```
 
-`cargo run` recompile automatiquement à chaque changement de code si tu
-relances la commande. Pour de la recompilation automatique à la sauvegarde,
-tu peux installer `cargo install cargo-watch` puis lancer `cargo watch -x run`.
+⚠️ À l'intérieur du réseau Docker d'`infra`, l'hôte est `postgres` (le nom
+du service Docker), **jamais** `localhost` — `localhost` dans le conteneur
+de ce service désigne le conteneur lui-même, pas la base de données. Voir
+[Intégration avec le reste de l'équipe](#intégration-avec-le-reste-de-léquipe).
+
+Pour arrêter : `Ctrl+C` puis `docker compose down` (ajouter `-v` pour
+aussi supprimer les données PostgreSQL locales — irréversible).
+
+```
+$ docker compose ps
+NAME                   STATUS
+chatvardage-auth-api   Up (healthy)
+chatvardage-auth-db    Up (healthy)
+
+$ docker exec chatvardage-auth-db pg_isready -U chatvardage -d chatvardage_auth
+/var/run/postgresql:5432 - accepting connections
+
+$ curl http://localhost:3001/health
+ok
+```
+
+Le conteneur `auth-api` applique la migration Prisma automatiquement au
+démarrage (`Applying migration ... All migrations have been successfully
+applied.` dans `docker compose logs auth-api` au premier démarrage ;
+`No pending migrations to apply.` aux démarrages suivants — les données
+survivent aux redémarrages grâce au volume nommé `auth-db-data`).
 
 #### Dépannage : `feature 'edition2024' is required`
 
@@ -251,8 +326,7 @@ Résumé :
 
 | Variable | Rôle |
 |----------|------|
-| `USE_MOCK_DB` | `true` = dépôt en mémoire, pas de PostgreSQL requis (voir [Mode mock](#mode-mock-développer-sans-postgresql)). `false` = vraie base, `DATABASE_URL` alors requise. |
-| `DATABASE_URL` | Chaîne de connexion PostgreSQL (ignorée si `USE_MOCK_DB=true`) |
+| `DATABASE_URL` | Chaîne de connexion PostgreSQL — **toujours requise**, aucune valeur par défaut (lue à la fois par Prisma pour les migrations et par SQLx au runtime). Format : `postgresql://<user>:<mot_de_passe>@<hôte>:5432/<base>`. Ex. local : `postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth` ; dans le réseau Docker d'`infra` : `postgresql://auth_service:auth_service_dev@postgres:5432/chatvardage_auth`. Le suffixe `?schema=public` (convention Prisma) est **volontairement omis** : testé et accepté par SQLx, qui l'ignore avec un simple avertissement (`ignoring unrecognized connect parameter`) plutôt qu'une erreur — inutile de toute façon puisque `public` est déjà le schéma par défaut de PostgreSQL. |
 | `JWT_SECRET` | Secret de signature des JWT — **à changer avant la remise finale**, ne jamais committer un vrai secret |
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton (défaut : 24h) |
 | `PORT` | Port HTTP du service (défaut : 3001) |
@@ -260,8 +334,8 @@ Résumé :
 ## Vérifier que ça fonctionne
 
 ```bash
-# Santé du service (en mode réel, ça confirme aussi indirectement que la
-# connexion à PostgreSQL a réussi — le service ne démarre pas sinon)
+# Santé du service (confirme aussi indirectement que la connexion à
+# PostgreSQL a réussi — le service ne démarre pas sinon)
 curl http://localhost:3001/health
 
 # Inscription
@@ -278,11 +352,54 @@ curl -X POST http://localhost:3001/api/auth/login \
 curl http://localhost:3001/api/auth/me -H "Authorization: Bearer <JETON>"
 ```
 
-> À consigner dans ce README avant la remise (voir consigne) : le résultat
-> de ces commandes depuis une installation propre (`git clone` +
-> `docker compose up --build`), en mode réel (`USE_MOCK_DB=false`) une fois
-> la base de données prête, ainsi qu'un `docker exec` ou `pg_isready`
-> confirmant que PostgreSQL est en bonne santé.
+**Vérifié** depuis une installation propre (`git clone` + `docker compose
+up --build`) : `/health` répond `ok`, l'inscription retourne un jeton et
+l'objet utilisateur, la connexion (pseudo ou courriel) fonctionne, et
+`GET /api/auth/me` avec ce jeton retourne le même profil — voir aussi la
+sortie `docker compose ps`/`pg_isready` consignée plus haut
+([Installation et lancement](#installation-et-lancement)).
+
+## Lancer les tests
+
+Comme le service lui-même, les tests n'ont **pas de mode mock** pour la
+base de données : `infrastructure::pg_utilisateur_repository` teste le
+vrai SQL contre une vraie base PostgreSQL migrée (les autres couches —
+contrôleurs, middleware, service applicatif — utilisent, elles, un dépôt
+en mémoire écrit spécifiquement pour les tests, jamais compilé dans le
+binaire de production : voir `infrastructure::fake_utilisateur_repository`,
+`#[cfg(test)]`).
+
+```bash
+# 1. Démarrer uniquement PostgreSQL (sans l'API)
+docker compose up -d postgres
+
+# 2. Appliquer les migrations sur cette base
+DATABASE_URL=postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth \
+  npx prisma migrate deploy
+
+# 3. Lancer les tests avec la même variable d'environnement
+DATABASE_URL=postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth \
+  cargo test
+```
+
+Couverture (voir aussi `AGENTS.md`) :
+
+```bash
+DATABASE_URL=postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth \
+  cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 99
+```
+
+`main.rs` est exclu du calcul : c'est l'assemblage final (charge la
+config, ouvre le pool PostgreSQL, démarre le serveur) — un point d'entrée
+d'intégration vérifié manuellement (voir plus haut, `docker compose up`)
+plutôt que par des tests unitaires, comme c'est l'usage pour ce genre de
+fonction `main` dans l'écosystème Rust. Le reste du code atteint 100 % de
+couverture des lignes à une exception près, documentée directement dans
+le code : le chemin d'erreur de `jsonwebtoken::encode` (signature JWT) et
+celui d'`Argon2::hash_password` sont défensifs — aucune entrée valide et
+raisonnable ne les déclenche, les forcer artificiellement en test
+exigerait d'injecter une fausse implémentation uniquement pour gonfler ce
+chiffre, ce qui n'apporterait aucune garantie réelle.
 
 ## Endpoints de l'API
 
@@ -295,57 +412,13 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | POST | `/api/auth/register` | non | Créer un compte |
 | POST | `/api/auth/login` | non | Se connecter (courriel ou pseudo) |
 | GET | `/api/auth/me` | oui | Utilisateur courant |
+| PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/courriel/mot de passe) |
+| DELETE | `/api/auth/me` | oui | Supprimer son propre compte |
 | GET | `/api/users` | admin | Lister les comptes |
+| GET | `/api/users/:id` | admin | Consulter un compte |
+| PATCH | `/api/users/:id` | admin | Modifier le pseudo/courriel d'un compte |
 | DELETE | `/api/users/:id` | admin | Supprimer un compte |
 | PATCH | `/api/users/:id/role` | admin | Changer le rôle d'un compte |
-
-## Intégration avec le reste de l'équipe
-
-- **Client desktop** : le `ChatGateway` actuel (Contrôle 1) ne connaît que
-  le pseudo (`Utilisateur { id, pseudo }`), sans mot de passe. Pour
-  brancher ce service, l'équipe doit étendre l'écran de connexion pour
-  collecter courriel + mot de passe, appeler `POST /api/auth/login` (ou
-  `/register`), conserver le `jeton` reçu (ex. dans le stockage local déjà
-  présent — voir `StockageUtilisateur.ts`), et l'envoyer dans l'en-tête
-  `Authorization` des futurs appels à l'API (messages privés,
-  configuration).
-- **Dépôt infra** : ce dépôt fournit un `Dockerfile` autonome — l'infra n'a
-  qu'à construire l'image (`docker build .` ou via `build:` dans son propre
-  `docker-compose.yml`) et lui fournir `USE_MOCK_DB=false`, `DATABASE_URL`,
-  `JWT_SECRET`, `JWT_DUREE_DE_VIE_HEURES` et `PORT` en variables
-  d'environnement. Le `docker-compose.yml` de **ce** dépôt sert uniquement
-  au développement local de ce service (en mode mock) ; il n'est pas
-  destiné à être utilisé tel quel par l'infra globale (qui aura
-  probablement un seul PostgreSQL partagé entre services plutôt qu'un par
-  service — à discuter en équipe).
-- **Service de migrations** : voir
-  [Schéma de données attendu](#schéma-de-données-attendu) — à partager
-  avec la personne responsable des migrations pour que la table
-  `utilisateurs` corresponde à ce que ce service attend. Une fois cette
-  table créée dans un environnement partagé, ce service peut y être
-  pointé avec `USE_MOCK_DB=false` + `DATABASE_URL`.
-- **Secret JWT partagé** : si un autre service doit vérifier les jetons
-  émis ici (plutôt que de toujours passer par `/api/auth/me`), il doit
-  connaître le même `JWT_SECRET`. À coordonner avec l'équipe.
-
-## Versions (tags Git)
-
-L'énoncé demande une gestion de version avec branches/tags Git et des
-numéros de version à jour "dans les fichiers package.json" — ce dépôt
-étant en Rust, l'équivalent est le champ `version` de `Cargo.toml`. Avant
-chaque tag de remise, mettre à jour `Cargo.toml` :
-
-```toml
-[package]
-version = "0.1.0"   # -> incrémenter selon les changements (SemVer)
-```
-
-puis :
-
-```bash
-git tag -a v0.1.0 -m "Contrôle 2 - service d'authentification"
-git push origin v0.1.0
-```
 
 ## Limites connues et pistes d'amélioration
 
@@ -362,58 +435,30 @@ git push origin v0.1.0
   ```
   Une commande CLI ou un script de "seed" pourrait remplacer cette étape
   manuelle dans une prochaine itération.
-- Pas encore de suppression de compte par l'utilisateur lui-même (seulement
-  par un admin) — à ajouter si exigé.
+- Un jeton émis reste valide jusqu'à son expiration même après suppression
+  du compte ou changement de rôle (pas de liste de révocation) : `GET
+  /api/auth/me` échoue bien après suppression (404, voir tests), mais un
+  rôle changé par un admin ne prend effet dans le jeton de la personne
+  concernée qu'à sa prochaine connexion. Acceptable pour la portée du
+  contrôle (24h de durée de vie par défaut) ; une liste de révocation ou
+  des jetons de plus courte durée seraient la piste d'amélioration.
 
-## Pour aller plus loin (je débute en Rust)
+### Note sur la vérification de ce projet
 
-Quelques repères pour naviguer dans ce projet si Rust est nouveau pour toi :
+Ce projet compile et tourne réellement — vérifié dans son intégralité,
+pas seulement relu :
 
-- **`Result<T, E>` et `?`** : au lieu d'exceptions, une fonction qui peut
-  échouer retourne `Result<T, E>`. L'opérateur `?` (ex. `let x =
-  fonction_qui_peut_echouer()?;`) propague l'erreur automatiquement si elle
-  survient, sinon donne la valeur `T`. Cherche "Rust error handling ?
-  operator" si un `?` te semble mystérieux.
-- **`async fn` et `.await`** : les fonctions réseau (HTTP, base de données)
-  sont asynchrones. `.await` "attend" le résultat sans bloquer tout le
-  programme. `#[tokio::main]` sur `main()` démarre le runtime qui exécute
-  ce code asynchrone.
-- **`Arc<T>`** : partage une valeur entre plusieurs tâches asynchrones sans
-  la dupliquer (ex. `jwt_service` dans `state.rs`). C'est un compteur de
-  références partagé, similaire à un pointeur intelligent.
-- **`trait`** : proche d'une interface. `FromRequestParts` (voir
-  `middleware.rs`) est un trait d'Axum qu'on implémente pour créer notre
-  propre "extracteur" (`UtilisateurAuthentifie`). `UtilisateurRepositoryPort`
-  (voir `domain/ports.rs`) en est un autre, qu'on a écrit nous-mêmes.
-- **`Arc<dyn Trait>`** : un pointeur partagé (`Arc`, voir plus haut) vers
-  "n'importe quel type qui implémente ce trait" (`dyn Trait`), choisi au
-  moment de l'exécution plutôt qu'à la compilation. C'est ce qui permet à
-  `main.rs` de décider, selon `USE_MOCK_DB`, d'injecter soit
-  `PgUtilisateurRepository` soit `MockUtilisateurRepository` dans
-  `AuthService` — le reste du code ne voit que
-  `dyn UtilisateurRepositoryPort` et ne sait pas lequel des deux tourne
-  réellement.
-- Ressources recommandées : [The Rust Book](https://doc.rust-lang.org/book/)
-  (gratuit, en ligne), la [documentation d'Axum](https://docs.rs/axum) et
-  ses [exemples officiels](https://github.com/tokio-rs/axum/tree/main/examples)
-  (notamment `jwt` et `error-handling`, très proches de ce que fait ce
-  dépôt).
-
-### Note importante sur la vérification de ce projet
-
-Ce projet a été écrit avec soin (aucune macro `query!` de SQLx nécessitant
-une base de données au moment de la compilation, structure simple, chaque
-fichier commenté) mais **n'a pas pu être compilé dans l'environnement où il
-a été généré** (accès réseau à crates.io bloqué par une politique réseau).
-La toute première chose à faire est donc :
-
-```bash
-cargo build
-```
-
-S'il y a des erreurs de compilation, elles seront probablement mineures
-(un nom importé qui a légèrement changé de place entre deux versions
-d'une dépendance, etc.). Le message d'erreur de `cargo` est généralement
-très explicite en Rust et indique souvent lui-même la correction à
-apporter — c'est une bonne première occasion de se familiariser avec le
-compilateur.
+- `cargo build`, `cargo build --release`, `cargo fmt --check`,
+  `cargo clippy --all-targets --all-features -- -D warnings` et
+  `cargo test` passent tous sans erreur ni avertissement ;
+- `docker compose up --build` démarre PostgreSQL et l'API depuis une
+  installation propre, applique la migration Prisma automatiquement, et
+  le scénario complet (inscription, connexion, `/me`, persistance après
+  redémarrage du conteneur) a été rejoué avec succès (voir
+  [Installation et lancement](#installation-et-lancement) et
+  [Vérifier que ça fonctionne](#vérifier-que-ça-fonctionne) pour le détail) ;
+- aucune macro `query!` de SQLx n'est utilisée (l'API "query builder" à
+  l'exécution est employée partout), donc aucune base de données n'est
+  requise au moment de la compilation elle-même — seulement à
+  l'exécution et pour les tests de `pg_utilisateur_repository` (voir
+  [Lancer les tests](#lancer-les-tests)).

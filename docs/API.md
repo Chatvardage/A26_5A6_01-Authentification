@@ -85,6 +85,7 @@ dégrade silencieusement ce contrat.
 | 409  | Conflit (pseudo ou courriel déjà utilisé) |
 | 413  | Corps de la requête trop volumineux (plus de 16 Kio, voir `interface::http::routes`) |
 | 500  | Erreur interne du serveur |
+| 503  | Base de données indisponible (`GET /health`) |
 
 ---
 
@@ -93,7 +94,9 @@ dégrade silencieusement ce contrat.
 Vérifie que le service répond (utilisé par le `HEALTHCHECK` Docker et par
 docker-compose).
 
-**Réponse `200`** : `ok` (texte brut)
+**Réponse `200`** : `ok` (texte brut).
+
+**Erreur `503`** : `{ "erreur": "base de données inaccessible" }`.
 
 ---
 
@@ -342,7 +345,7 @@ n'existe pas.
 ### PATCH /api/users/{id}/role 🔒👑
 
 Change le rôle d'un utilisateur. Seule route qui permet de modifier un
-rôle — aucun utilisateur ne peut changer le sien (voir
+rôle; un admin peut aussi changer le sien (voir
 [Permissions](#permissions--qui-peut-faire-quoi)).
 
 **Corps de la requête**
@@ -363,8 +366,8 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
 
 - Mots de passe hachés avec Argon2 (jamais stockés en clair).
 - Chaque requête protégée présente un JWT signé (HMAC) contenant `sub`
-  (id utilisateur — nom imposé par la norme JWT, non traduit), `pseudo`,
-  `role`, `version_auth` et `exp` (expiration — aussi imposé par la norme
+  (id utilisateur — nom imposé par la norme JWT, non traduit),
+  `version_auth` et `exp` (expiration — aussi imposé par la norme
   JWT, 24h par défaut, configurable via `JWT_DUREE_DE_VIE_HEURES`). Après
   validation cryptographique, le middleware relit l'utilisateur en base :
   une suppression, un changement de rôle ou un changement de mot de passe

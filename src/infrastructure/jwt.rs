@@ -29,7 +29,6 @@ use crate::error::AppError;
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
-    pub pseudo: String,
     pub version_auth: i32,
     pub exp: usize,
 }
@@ -50,7 +49,6 @@ impl JwtService {
     pub fn generer_token(
         &self,
         id_utilisateur: Uuid,
-        pseudo: &str,
         version_auth: i32,
     ) -> Result<String, AppError> {
         let expiration = Utc::now()
@@ -60,7 +58,6 @@ impl JwtService {
 
         let claims = Claims {
             sub: id_utilisateur.to_string(),
-            pseudo: pseudo.to_string(),
             version_auth,
             exp: expiration,
         };
@@ -93,11 +90,10 @@ mod tests {
         let service = JwtService::new("secret".into(), 24);
         let id = Uuid::new_v4();
 
-        let jeton = service.generer_token(id, "alice", 0).unwrap();
+        let jeton = service.generer_token(id, 0).unwrap();
         let claims = service.valider_token(&jeton).unwrap();
 
         assert_eq!(claims.sub, id.to_string());
-        assert_eq!(claims.pseudo, "alice");
         assert_eq!(claims.version_auth, 0);
     }
 
@@ -106,7 +102,7 @@ mod tests {
         // Durée de vie négative : le jeton est déjà expiré au moment où
         // il est émis.
         let service = JwtService::new("secret".into(), -1);
-        let jeton = service.generer_token(Uuid::new_v4(), "alice", 0).unwrap();
+        let jeton = service.generer_token(Uuid::new_v4(), 0).unwrap();
 
         assert!(service.valider_token(&jeton).is_err());
     }
@@ -115,7 +111,7 @@ mod tests {
     fn rejette_un_jeton_signe_avec_un_autre_secret() {
         let service_a = JwtService::new("secret-a".into(), 24);
         let service_b = JwtService::new("secret-b".into(), 24);
-        let jeton = service_a.generer_token(Uuid::new_v4(), "alice", 0).unwrap();
+        let jeton = service_a.generer_token(Uuid::new_v4(), 0).unwrap();
 
         assert!(service_b.valider_token(&jeton).is_err());
     }

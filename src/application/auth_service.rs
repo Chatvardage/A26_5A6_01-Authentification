@@ -52,11 +52,9 @@ impl AuthService {
             .await
             .map_err(mapper_erreur_depot)?;
 
-        let jeton = self.jwt.generer_token(
-            utilisateur.id,
-            &utilisateur.pseudo,
-            utilisateur.version_auth,
-        )?;
+        let jeton = self
+            .jwt
+            .generer_token(utilisateur.id, utilisateur.version_auth)?;
         Ok(AuthResponse {
             jeton,
             utilisateur: UtilisateurPublic::from(utilisateur),
@@ -121,11 +119,9 @@ impl AuthService {
             .filter(|_| mot_de_passe_valide)
             .ok_or_else(|| AppError::NonAutorise("identifiant ou mot de passe invalide".into()))?;
 
-        let jeton = self.jwt.generer_token(
-            utilisateur.id,
-            &utilisateur.pseudo,
-            utilisateur.version_auth,
-        )?;
+        let jeton = self
+            .jwt
+            .generer_token(utilisateur.id, utilisateur.version_auth)?;
         Ok(AuthResponse {
             jeton,
             utilisateur: UtilisateurPublic::from(utilisateur),

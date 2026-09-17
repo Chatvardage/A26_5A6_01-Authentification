@@ -21,7 +21,7 @@ pub async fn lister(
 ) -> Result<ReponseJson<Vec<UtilisateurPublic>>, AppError> {
     let utilisateurs = state
         .depot_utilisateurs
-        .lister()
+        .lister(100, 0)
         .await
         .map_err(|e| AppError::Interne(e.to_string()))?;
 

@@ -36,7 +36,7 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
         identifiant: &str,
     ) -> Result<Option<Utilisateur>, RepoError>;
 
-    async fn lister(&self) -> Result<Vec<Utilisateur>, RepoError>;
+    async fn lister(&self, limite: i64, decalage: i64) -> Result<Vec<Utilisateur>, RepoError>;
 
     /// Modifie un ou plusieurs champs d'un compte existant. Chaque
     /// paramètre `None` laisse la valeur actuelle inchangée (équivalent

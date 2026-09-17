@@ -12,6 +12,7 @@ use axum::{
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
+use crate::error::AppError;
 use crate::state::AppState;
 
 use super::{auth_controller, utilisateurs_controller};
@@ -109,6 +110,8 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(DefaultBodyLimit::max(LIMITE_CORPS_REQUETE_OCTETS))
+        .method_not_allowed_fallback(methode_non_autorisee)
+        .fallback(route_inconnue)
         .with_state(state)
 }
 
@@ -120,17 +123,24 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
 /// seulement que le processus HTTP tourne, pas que sa dépendance
 /// critique (la base) est joignable — ce que le `HEALTHCHECK` Docker et
 /// le `depends_on: condition: service_healthy` d'`infra` supposent.
-async fn sante(State(state): State<AppState>) -> (StatusCode, &'static str) {
+async fn sante(State(state): State<AppState>) -> Result<(StatusCode, &'static str), AppError> {
     match state.depot_utilisateurs.verifier_sante().await {
-        Ok(()) => (StatusCode::OK, "ok"),
+        Ok(()) => Ok((StatusCode::OK, "ok")),
         Err(e) => {
             tracing::error!(erreur = %e, "healthcheck: base de données inaccessible");
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "base de données inaccessible",
-            )
+            Err(AppError::ServiceIndisponible(
+                "base de données inaccessible".into(),
+            ))
         }
     }
+}
+
+async fn route_inconnue() -> AppError {
+    AppError::Introuvable("route introuvable".into())
+}
+
+async fn methode_non_autorisee() -> AppError {
+    AppError::MethodeNonAutorisee("méthode HTTP non autorisée".into())
 }
 
 /// Tests de bout en bout : chaque test construit sa propre application
@@ -331,6 +341,22 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(reponse.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let octets = reponse.into_body().collect().await.unwrap().to_bytes();
+        let corps: Value = serde_json::from_slice(&octets).unwrap();
+        assert_eq!(corps["erreur"], "base de données inaccessible");
+    }
+
+    #[tokio::test]
+    async fn route_inconnue_et_methode_non_autorisee_respectent_lenveloppe_erreur() {
+        let ctx = nouveau_contexte();
+
+        let (statut, corps) = requete(&ctx.app, "GET", "/inconnue", None, None).await;
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(corps["erreur"], "route introuvable");
+
+        let (statut, corps) = requete(&ctx.app, "PUT", "/health", None, None).await;
+        assert_eq!(statut, StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(corps["erreur"], "méthode HTTP non autorisée");
     }
 
     #[tokio::test]
@@ -779,9 +805,7 @@ mod tests {
         let ctx = nouveau_contexte();
         // Durée de vie négative : le jeton est expiré dès sa création.
         let service_expire = JwtService::new(ctx.secret.clone(), -1);
-        let jeton = service_expire
-            .generer_token(Uuid::new_v4(), "alice", 0)
-            .unwrap();
+        let jeton = service_expire.generer_token(Uuid::new_v4(), 0).unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
@@ -794,7 +818,6 @@ mod tests {
             &ctx,
             Claims {
                 sub: "pas-un-uuid".into(),
-                pseudo: "alice".into(),
                 version_auth: 0,
                 exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
             },

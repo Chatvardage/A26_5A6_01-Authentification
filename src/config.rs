@@ -3,6 +3,9 @@
 //! `docker-compose.yml` en conteneur — le code ne change pas selon
 //! l'environnement, seule la source des valeurs change.
 
+#[cfg(test)]
+pub static VERROU_ENV_TEST: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Longueur minimale acceptée pour `JWT_SECRET` (256 bits si le secret
 /// est aussi aléatoire que long — la taille de sortie native de HMAC-SHA256,
 /// l'algorithme par défaut de `jsonwebtoken`). `std::env::var` réussit dès
@@ -72,7 +75,9 @@ impl Config {
 
         Self {
             database_url: std::env::var("DATABASE_URL")
-                .expect("DATABASE_URL doit être définie (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock"),
+                .ok()
+                .filter(|url| !url.trim().is_empty())
+                .expect("DATABASE_URL doit être définie et non vide (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock"),
             jwt_secret,
             jwt_duree_de_vie_heures,
             port: lire_var_numerique("PORT", 3001u16),
@@ -109,15 +114,11 @@ fn lire_var_numerique<T: std::str::FromStr>(nom: &str, defaut: T) -> T {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
 
     // `std::env` est un état global partagé par tout le process : sans
     // ce verrou, les tests de ce module (exécutés en parallèle par
     // défaut par `cargo test`) se marcheraient dessus.
-    static VERROU_ENV: Mutex<()> = Mutex::new(());
-
     /// Fixe les variables d'environnement listées (`None` = retirée) le
     /// temps d'exécuter `f`, puis restaure exactement leur valeur
     /// précédente — même si `f` panique (`#[should_panic]`).
@@ -125,7 +126,7 @@ mod tests {
     where
         F: FnOnce() + std::panic::UnwindSafe,
     {
-        let _garde = VERROU_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let _garde = VERROU_ENV_TEST.lock().unwrap_or_else(|e| e.into_inner());
 
         let precedentes: Vec<(String, Option<String>)> = vars
             .iter()
@@ -269,6 +270,20 @@ mod tests {
     fn panique_si_database_url_absente() {
         avec_env(
             &[("DATABASE_URL", None), ("JWT_SECRET", Some(SECRET_VALIDE))],
+            || {
+                let _ = Config::depuis_variables_environnement();
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "DATABASE_URL doit être définie et non vide")]
+    fn panique_si_database_url_est_vide() {
+        avec_env(
+            &[
+                ("DATABASE_URL", Some("")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+            ],
             || {
                 let _ = Config::depuis_variables_environnement();
             },

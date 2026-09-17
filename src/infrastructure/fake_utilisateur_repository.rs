@@ -105,12 +105,16 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             .cloned())
     }
 
-    async fn lister(&self) -> Result<Vec<Utilisateur>, RepoError> {
+    async fn lister(&self, limite: i64, decalage: i64) -> Result<Vec<Utilisateur>, RepoError> {
         self.verifier_erreur_provoquee()?;
         let mut utilisateurs: Vec<Utilisateur> =
             self.utilisateurs.read().await.values().cloned().collect();
         utilisateurs.sort_by_key(|u| std::cmp::Reverse(u.cree_le));
-        Ok(utilisateurs)
+        Ok(utilisateurs
+            .into_iter()
+            .skip(decalage as usize)
+            .take(limite as usize)
+            .collect())
     }
 
     async fn modifier(
@@ -329,7 +333,10 @@ mod tests {
             repo.trouver_par_identifiant("x").await,
             Err(RepoError::Interne(_))
         ));
-        assert!(matches!(repo.lister().await, Err(RepoError::Interne(_))));
+        assert!(matches!(
+            repo.lister(100, 0).await,
+            Err(RepoError::Interne(_))
+        ));
         assert!(matches!(
             repo.modifier(Uuid::new_v4(), Some("x"), None, None).await,
             Err(RepoError::Interne(_))
@@ -358,7 +365,7 @@ mod tests {
         ));
 
         repo.provoquer_erreur_interne(false);
-        assert!(repo.lister().await.is_ok());
+        assert!(repo.lister(100, 0).await.is_ok());
         assert!(repo.verifier_sante().await.is_ok());
     }
 
@@ -491,7 +498,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let second = repo.creer("bob", "bob@example.com", "hash").await.unwrap();
 
-        let tous = repo.lister().await.unwrap();
+        let tous = repo.lister(100, 0).await.unwrap();
         assert_eq!(tous.first().unwrap().id, second.id);
         assert_eq!(tous.last().unwrap().id, premier.id);
     }

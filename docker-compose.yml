@@ -24,9 +24,9 @@ services:
     image: postgres:16-alpine
     container_name: chatvardage-auth-db
     environment:
-      POSTGRES_USER: chatvardage
-      POSTGRES_PASSWORD: chatvardage
-      POSTGRES_DB: chatvardage_auth
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER doit être défini dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini dans .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB doit être défini dans .env}
     ports:
       # Base de développement accessible seulement depuis la machine hôte :
       # les identifiants locaux ne doivent pas être publiés sur le réseau.
@@ -52,7 +52,7 @@ services:
       # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
       # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
       # seul schéma ("public", le défaut PostgreSQL).
-      DATABASE_URL: postgresql://chatvardage:chatvardage@postgres:5432/chatvardage_auth
+      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER doit être défini dans .env}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini dans .env}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB doit être défini dans .env}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini dans .env}
       JWT_DUREE_DE_VIE_HEURES: "24"
       PORT: "3001"

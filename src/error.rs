@@ -51,6 +51,12 @@ pub enum AppError {
     #[error("erreur d'extraction ({0}): {1}")]
     Extraction(StatusCode, String),
 
+    #[error("service indisponible: {0}")]
+    ServiceIndisponible(String),
+
+    #[error("méthode non autorisée: {0}")]
+    MethodeNonAutorisee(String),
+
     #[error("erreur interne: {0}")]
     Interne(String),
 }
@@ -68,6 +74,8 @@ impl IntoResponse for AppError {
             AppError::Validation(erreurs) => (StatusCode::BAD_REQUEST, erreurs.to_string()),
             AppError::Requete(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Extraction(statut, m) => (*statut, m.clone()),
+            AppError::ServiceIndisponible(m) => (StatusCode::SERVICE_UNAVAILABLE, m.clone()),
+            AppError::MethodeNonAutorisee(m) => (StatusCode::METHOD_NOT_ALLOWED, m.clone()),
             AppError::Interne(m) => {
                 // On journalise le détail réel côté serveur, mais on ne
                 // le renvoie JAMAIS au client (pourrait exposer des

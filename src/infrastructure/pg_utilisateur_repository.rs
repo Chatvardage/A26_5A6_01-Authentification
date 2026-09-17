@@ -78,11 +78,13 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         .map_err(mapper_erreur_sql)
     }
 
-    async fn lister(&self) -> Result<Vec<Utilisateur>, RepoError> {
+    async fn lister(&self, limite: i64, decalage: i64) -> Result<Vec<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
             "SELECT id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le \
-             FROM utilisateurs ORDER BY cree_le DESC",
+             FROM utilisateurs ORDER BY cree_le DESC LIMIT $1 OFFSET $2",
         )
+        .bind(limite)
+        .bind(decalage)
         .fetch_all(&self.pool)
         .await
         .map_err(mapper_erreur_sql)
@@ -220,7 +222,13 @@ mod tests {
     use crate::infrastructure::db;
 
     async fn pool_de_test() -> PgPool {
-        let url = std::env::var("DATABASE_URL").expect(
+        let url = {
+            let _garde = crate::config::VERROU_ENV_TEST
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            std::env::var("DATABASE_URL")
+        }
+        .expect(
             "DATABASE_URL doit être définie pour ces tests (voir README, section \"Lancer les tests\") \
              — ex. `docker compose up -d postgres` puis exporter la même URL que .env.example",
         );
@@ -358,7 +366,7 @@ mod tests {
             .await
             .unwrap();
 
-        let tous = repo.lister().await.unwrap();
+        let tous = repo.lister(100, 0).await.unwrap();
         assert!(tous.iter().any(|u| u.id == cree.id));
 
         repo.supprimer(cree.id).await.unwrap();

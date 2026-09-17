@@ -260,6 +260,8 @@ migration Prisma en local, il faut en plus :
 git clone <url-de-ce-dépôt>
 cd A26_5A6_01-Authentification
 cp .env.example .env
+# Générer puis renseigner JWT_SECRET dans .env (64 caractères)
+openssl rand -hex 32
 docker compose up --build
 ```
 

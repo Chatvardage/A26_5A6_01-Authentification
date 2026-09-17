@@ -49,7 +49,7 @@ services:
       # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
       # seul schéma ("public", le défaut PostgreSQL).
       DATABASE_URL: postgresql://chatvardage:chatvardage@postgres:5432/chatvardage_auth
-      JWT_SECRET: dev-secret-ne-pas-utiliser-en-production
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini dans .env}
       JWT_DUREE_DE_VIE_HEURES: "24"
       PORT: "3001"
       RUST_LOG: info

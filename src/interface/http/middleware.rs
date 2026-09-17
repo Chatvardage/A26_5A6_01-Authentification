@@ -11,7 +11,7 @@ use axum::{extract::FromRequestParts, http::request::Parts};
 use axum_extra::headers::{authorization::Bearer, Authorization};
 use axum_extra::TypedHeader;
 
-use crate::domain::utilisateur::Role;
+use crate::domain::utilisateur::{Role, UtilisateurPublic};
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -19,6 +19,7 @@ pub struct UtilisateurAuthentifie {
     pub id_utilisateur: uuid::Uuid,
     pub pseudo: String,
     pub role: Role,
+    pub utilisateur: UtilisateurPublic,
 }
 
 // Dans axum 0.7, le trait `FromRequestParts` est lui-même défini avec la
@@ -61,11 +62,13 @@ impl FromRequestParts<AppState> for UtilisateurAuthentifie {
             return Err(AppError::NonAutorise("jeton révoqué".into()));
         }
         let role = utilisateur.role();
+        let utilisateur = UtilisateurPublic::from(utilisateur);
 
         Ok(UtilisateurAuthentifie {
             id_utilisateur,
-            pseudo: utilisateur.pseudo,
+            pseudo: utilisateur.pseudo.clone(),
             role,
+            utilisateur,
         })
     }
 }

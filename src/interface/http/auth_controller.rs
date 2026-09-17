@@ -36,18 +36,8 @@ pub async fn login(
 /// GET /api/auth/me — retourne l'utilisateur courant à partir du jeton.
 /// Utile pour le desktop : au démarrage, valider un jeton déjà stocké
 /// localement sans redemander le mot de passe.
-pub async fn me(
-    State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
-) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    let utilisateur = state
-        .depot_utilisateurs
-        .trouver_par_id(session.id_utilisateur)
-        .await
-        .map_err(|e| AppError::Interne(e.to_string()))?
-        .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
-
-    Ok(ReponseJson(UtilisateurPublic::from(utilisateur)))
+pub async fn me(session: UtilisateurAuthentifie) -> ReponseJson<UtilisateurPublic> {
+    ReponseJson(session.utilisateur)
 }
 
 /// PATCH /api/auth/me — modifie son propre profil (pseudo, courriel

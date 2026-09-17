@@ -221,10 +221,11 @@ il ne remplace pas SQLx et n'est pas une dépendance du binaire Rust.
 
 ## Prérequis
 
-> **Note sur `zmij` dans `Cargo.lock` :** `zmij` est une dépendance réelle
-> de `serde_json` dans la version verrouillée par Cargo. Son entrée est
-> générée par le gestionnaire de dépendances et ne doit pas être supprimée
-> ou modifiée manuellement.
+> **Note sur `zmij` dans `Cargo.lock` :** la commande
+> `cargo tree --invert zmij` confirme que `zmij v1.0.23` est une dépendance
+> transitive de `serde_json v1.0.151`, résolue et vérifiée par Cargo avec la
+> somme de contrôle du lockfile. Son entrée est générée par Cargo; ne jamais
+> modifier le lockfile manuellement.
 
 **Rien à installer localement pour faire tourner le service** à part
 Docker (conforme à la consigne du contrôle) — les migrations Prisma
@@ -353,7 +354,7 @@ Résumé :
 | `DATABASE_URL` | Chaîne de connexion PostgreSQL — **toujours requise**, aucune valeur par défaut (lue à la fois par Prisma pour les migrations et par SQLx au runtime). Format : `postgresql://<user>:<mot_de_passe>@<hôte>:5432/<base>`. Ex. local : `postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth` ; dans le réseau Docker d'`infra` : `postgresql://auth_service:auth_service_dev@postgres:5432/chatvardage_auth`. Le suffixe `?schema=public` (convention Prisma) est **volontairement omis** : testé et accepté par SQLx, qui l'ignore avec un simple avertissement (`ignoring unrecognized connect parameter`) plutôt qu'une erreur — inutile de toute façon puisque `public` est déjà le schéma par défaut de PostgreSQL. |
 | `JWT_SECRET` | Secret de signature des JWT — **toujours requis, au moins 32 caractères (256 bits)** (le service refuse de démarrer sinon, y compris si la variable existe mais est vide — voir `config.rs`). Générer avec `openssl rand -hex 32` (64 caractères). **À changer avant la remise finale**, ne jamais committer un vrai secret. |
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton en heures (défaut : 24h, doit être comprise entre 1 et 720 — 30 jours). Le rôle et l'existence de l'utilisateur sont revérifiés en base à chaque route protégée, donc une durée élevée ne conserve pas les droits d'un compte supprimé ou rétrogradé. |
-| `PORT` | Port HTTP du service (défaut : 3001) |
+| `PORT` | Port HTTP du service et du mapping du Compose autonome (défaut : `3001`). Avec `PORT=3099`, l'API est exposée sur `http://localhost:3099` et son healthcheck interroge ce même port. |
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
 | `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
 
@@ -505,8 +506,9 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
   `ADMIN_BOOTSTRAP_PSEUDO` appliquée au démarrage) pourrait remplacer
   cette étape manuelle dans une prochaine itération.
 - Aucune limite sur le nombre d'admins ni garde-fou du genre « il doit
-  rester au moins un admin » : un admin peut changer son propre rôle ou
-  celui de n'importe qui d'autre, y compris se rétrograder lui-même.
+  rester au moins un admin ». En revanche, un admin ne peut changer ni son
+  propre rôle ni celui d'un autre admin : seules les cibles non-admin sont
+  modifiables via `PATCH /api/users/{id}/role`.
 - **Énumération de comptes possible via `POST /api/auth/register`** :
   `connecter` investit un effort réel pour empêcher l'énumération à la
   connexion (hachage factice à temps constant, message générique — voir

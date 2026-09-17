@@ -12,7 +12,10 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 use super::extracteurs::{Json, Path};
-use super::middleware::{AdministrateurAuthentifie, AdministrateurEtAutreUtilisateur};
+use super::middleware::{
+    AdministrateurAuthentifie, AdministrateurEtAutreUtilisateur,
+    AdministrateurEtUtilisateurNonAdmin,
+};
 
 /// GET /api/users — liste au plus 100 comptes (admin uniquement).
 pub async fn lister(
@@ -105,18 +108,33 @@ pub async fn supprimer(
 /// uniquement). Permet de promouvoir un utilisateur en modérateur/admin.
 pub async fn changer_role(
     State(state): State<AppState>,
-    AdministrateurEtAutreUtilisateur {
+    AdministrateurEtUtilisateurNonAdmin {
         session,
         id_utilisateur_cible: id,
-    }: AdministrateurEtAutreUtilisateur,
+    }: AdministrateurEtUtilisateurNonAdmin,
     Json(requete): Json<ChangerRoleRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    let utilisateur = state
+    let utilisateur = match state
         .depot_utilisateurs
-        .changer_role(id, requete.role)
+        .changer_role_si_non_admin(id, requete.role)
         .await
         .map_err(|e| AppError::Interne(e.to_string()))?
-        .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+    {
+        Some(utilisateur) => utilisateur,
+        None => match state
+            .depot_utilisateurs
+            .trouver_par_id(id)
+            .await
+            .map_err(|e| AppError::Interne(e.to_string()))?
+        {
+            Some(_) => {
+                return Err(AppError::Interdit(
+                    "le rôle d'un administrateur ne peut pas être modifié".into(),
+                ));
+            }
+            None => return Err(AppError::Introuvable("utilisateur introuvable".into())),
+        },
+    };
 
     let utilisateur = UtilisateurPublic::from(utilisateur);
     let nouveau_role = utilisateur.role.as_str();

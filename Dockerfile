@@ -87,7 +87,7 @@ EXPOSE 3001
 # Utilisé par docker-compose (condition "service_healthy") pour savoir
 # quand l'API est prête à recevoir des requêtes.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=5 \
-    CMD curl -f http://localhost:3001/health || exit 1
+    CMD-SHELL curl -f "http://localhost:$${PORT:-3001}/health" || exit 1
 
 # Migrer AVANT de démarrer, jamais l'inverse (voir AGENTS.md, section
 # Docker) : si la migration échoue, le conteneur s'arrête plutôt que de

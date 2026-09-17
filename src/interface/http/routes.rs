@@ -278,7 +278,7 @@ mod tests {
         mot_de_passe: &str,
     ) -> String {
         ctx.depot_concret
-            .changer_role(id, Role::Admin)
+            .changer_role_si_non_admin(id, Role::Admin)
             .await
             .unwrap();
         let (statut, corps) = requete(
@@ -1361,9 +1361,8 @@ mod tests {
             promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
 
         ctx.depot_concret
-            .changer_role(id_admin, Role::Utilisateur)
-            .await
-            .unwrap();
+            .changer_role_pour_test(id_admin, Role::Utilisateur)
+            .await;
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
@@ -1636,6 +1635,61 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
         assert_eq!(corps["erreur"], "corps JSON invalide");
+    }
+
+    #[tokio::test]
+    async fn admin_ne_peut_pas_changer_le_role_dun_autre_admin() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_autre_admin, _) =
+            inscrire(&ctx.app, "admin2", "admin2@example.com", "motdepasse123").await;
+        ctx.depot_concret
+            .changer_role_si_non_admin(id_autre_admin, Role::Admin)
+            .await
+            .unwrap();
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_autre_admin}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "utilisateur" })),
+        )
+        .await;
+
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+        assert_eq!(
+            corps["erreur"],
+            "le rôle d'un administrateur ne peut pas être modifié"
+        );
+    }
+
+    #[tokio::test]
+    async fn changement_role_retourne_404_si_la_cible_est_supprimee_pendant_la_requete() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        ctx.depot_concret
+            .provoquer_suppression_avant_changement_role();
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "moderateur" })),
+        )
+        .await;
+
+        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(corps["erreur"], "utilisateur introuvable");
     }
 
     #[tokio::test]

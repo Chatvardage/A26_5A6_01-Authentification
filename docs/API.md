@@ -42,9 +42,10 @@ finalement distinguer les deux.
 | Supprimer son propre compte | ✅ `DELETE /api/auth/me` | ✅ `DELETE /api/auth/me` |
 | Supprimer le compte d'un autre utilisateur | ❌ | ✅ `DELETE /api/users/{id}` |
 
-Seul un `admin`, via `PATCH /api/users/{id}/role`, peut changer un rôle,
-le sien ou celui d'un autre compte. Un utilisateur ou modérateur ne peut
-jamais s'auto-promouvoir `admin`.
+Seul un `admin`, via `PATCH /api/users/{id}/role`, peut changer le rôle
+d'un compte non-admin. Ni son propre rôle ni celui d'un autre admin ne
+peuvent être modifiés. Un utilisateur ou modérateur ne peut jamais
+s'auto-promouvoir `admin`.
 
 ---
 
@@ -346,8 +347,8 @@ n'existe pas.
 
 ### PATCH /api/users/{id}/role 🔒👑
 
-Change le rôle d'un utilisateur. Seule route qui permet de modifier un
-rôle; un admin peut aussi changer le sien (voir
+Change le rôle d'un utilisateur non-admin. Un admin ne peut pas modifier
+son propre rôle ni celui d'un autre admin (voir
 [Permissions](#permissions--qui-peut-faire-quoi)).
 
 **Corps de la requête**
@@ -360,7 +361,8 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
 
 **Réponse `200`** : l'objet utilisateur mis à jour.
 
-**Erreurs** : `400` (valeur de rôle invalide), `404` si l'id n'existe pas.
+**Erreurs** : `400` (valeur de rôle invalide), `403` si l'id cible un
+admin, `404` si l'id n'existe pas.
 
 ---
 

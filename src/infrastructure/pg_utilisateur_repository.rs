@@ -172,12 +172,16 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         Ok(resultat.rows_affected() > 0)
     }
 
-    async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError> {
+    async fn changer_role_si_non_admin(
+        &self,
+        id: Uuid,
+        role: Role,
+    ) -> Result<Option<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
             r#"
             UPDATE utilisateurs
             SET role = $2, version_auth = version_auth + 1, modifie_le = now()
-            WHERE id = $1
+            WHERE id = $1 AND role <> 'admin'
             RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,
         )
@@ -479,7 +483,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn changer_role_met_a_jour_le_role() {
+    async fn changer_role_si_non_admin_met_a_jour_le_role() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         let pseudo = identifiant_unique("gina");
         let cree = repo
@@ -488,20 +492,26 @@ mod tests {
             .unwrap();
 
         let modifie = repo
-            .changer_role(cree.id, Role::Admin)
+            .changer_role_si_non_admin(cree.id, Role::Admin)
             .await
             .unwrap()
             .unwrap();
         assert_eq!(modifie.role, "admin");
 
+        assert!(repo
+            .changer_role_si_non_admin(cree.id, Role::Utilisateur)
+            .await
+            .unwrap()
+            .is_none());
+
         repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]
-    async fn changer_role_id_inexistant_retourne_none() {
+    async fn changer_role_si_non_admin_id_inexistant_retourne_none() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         assert!(repo
-            .changer_role(Uuid::new_v4(), Role::Admin)
+            .changer_role_si_non_admin(Uuid::new_v4(), Role::Admin)
             .await
             .unwrap()
             .is_none());

@@ -28,6 +28,9 @@ pub struct FakeUtilisateurRepository {
     /// tester la branche 500 de chaque contrôleur sans dépendre d'une
     /// vraie panne PostgreSQL.
     provoque_erreur: AtomicBool,
+    /// Simule une suppression concurrente entre le chargement de la cible
+    /// par l'extracteur et la mutation atomique du rôle.
+    supprimer_avant_changement_role: AtomicBool,
 }
 
 impl FakeUtilisateurRepository {
@@ -37,6 +40,22 @@ impl FakeUtilisateurRepository {
 
     pub fn provoquer_erreur_interne(&self, valeur: bool) {
         self.provoque_erreur.store(valeur, Ordering::SeqCst);
+    }
+
+    pub fn provoquer_suppression_avant_changement_role(&self) {
+        self.supprimer_avant_changement_role
+            .store(true, Ordering::SeqCst);
+    }
+
+    /// Prépare un scénario de test qui simule une modification directe en
+    /// base, hors des routes d'administration normalement protégées.
+    pub async fn changer_role_pour_test(&self, id: Uuid, role: Role) {
+        let mut utilisateurs = self.utilisateurs.write().await;
+        if let Some(utilisateur) = utilisateurs.get_mut(&id) {
+            utilisateur.role = role.as_str().to_string();
+            utilisateur.version_auth += 1;
+            utilisateur.modifie_le = Utc::now();
+        }
     }
 
     fn verifier_erreur_provoquee(&self) -> Result<(), RepoError> {
@@ -224,15 +243,30 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         Ok(true)
     }
 
-    async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError> {
+    async fn changer_role_si_non_admin(
+        &self,
+        id: Uuid,
+        role: Role,
+    ) -> Result<Option<Utilisateur>, RepoError> {
         self.verifier_erreur_provoquee()?;
         let mut utilisateurs = self.utilisateurs.write().await;
-        Ok(utilisateurs.get_mut(&id).map(|u| {
-            u.role = role.as_str().to_string();
-            u.version_auth += 1;
-            u.modifie_le = Utc::now();
-            u.clone()
-        }))
+        if self
+            .supprimer_avant_changement_role
+            .swap(false, Ordering::SeqCst)
+        {
+            utilisateurs.remove(&id);
+            return Ok(None);
+        }
+        let Some(utilisateur) = utilisateurs.get_mut(&id) else {
+            return Ok(None);
+        };
+        if utilisateur.role == Role::Admin.as_str() {
+            return Ok(None);
+        }
+        utilisateur.role = role.as_str().to_string();
+        utilisateur.version_auth += 1;
+        utilisateur.modifie_le = Utc::now();
+        Ok(Some(utilisateur.clone()))
     }
 
     async fn verifier_sante(&self) -> Result<(), RepoError> {
@@ -356,7 +390,8 @@ mod tests {
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(
-            repo.changer_role(Uuid::new_v4(), Role::Admin).await,
+            repo.changer_role_si_non_admin(Uuid::new_v4(), Role::Admin)
+                .await,
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(

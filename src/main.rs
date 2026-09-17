@@ -23,16 +23,18 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() {
-    let config = Config::depuis_env();
+    config::charger_dotenv();
 
     // Journalisation : affiche les logs `info` par défaut, ou selon la
     // variable d'env RUST_LOG (ex. `RUST_LOG=debug`), chargée depuis
-    // `.env` par `Config::depuis_env()` ci-dessus si nécessaire.
+    // `.env` par `config::charger_dotenv()` ci-dessus si nécessaire.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
+
+    let config = Config::depuis_env();
 
     tracing::info!("connexion à la base de données...");
     let pool = db::connect(&config.database_url)

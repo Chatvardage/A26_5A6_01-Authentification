@@ -75,7 +75,14 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
         mot_de_passe_hache_actuel: &str,
     ) -> Result<bool, RepoError>;
 
-    async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError>;
+    /// Change le rôle uniquement si le compte cible n'est pas déjà admin.
+    /// Cette condition doit être atomique pour empêcher une promotion
+    /// concurrente de contourner la règle d'administration.
+    async fn changer_role_si_non_admin(
+        &self,
+        id: Uuid,
+        role: Role,
+    ) -> Result<Option<Utilisateur>, RepoError>;
 
     /// Confirme que le stockage sous-jacent répond réellement (ex. `SELECT
     /// 1` pour `PgUtilisateurRepository`) — utilisé par `GET /health`

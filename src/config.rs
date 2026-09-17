@@ -44,10 +44,7 @@ pub struct Config {
 
 impl Config {
     pub fn depuis_env() -> Self {
-        // `.env` est optionnel : en conteneur Docker, les variables sont
-        // déjà injectées par docker-compose, donc on ignore l'erreur si
-        // le fichier n'existe pas.
-        let _ = dotenvy::dotenv();
+        charger_dotenv();
         Self::depuis_variables_environnement()
     }
 
@@ -89,6 +86,15 @@ impl Config {
             }),
         }
     }
+}
+
+/// Charge les variables du fichier `.env` lorsqu'il existe. Cette étape
+/// reste explicite afin que `main` puisse l'exécuter avant d'initialiser
+/// `tracing`, ce qui rend `RUST_LOG` disponible pour le subscriber.
+pub fn charger_dotenv() {
+    // En conteneur Docker, les variables sont déjà injectées par Compose;
+    // l'absence de `.env` est donc normale.
+    let _ = dotenvy::dotenv();
 }
 
 /// Lit une variable d'environnement numérique optionnelle. Contrairement

@@ -47,16 +47,16 @@ services:
     ports:
       # Le Gateway porte la limitation de débit en intégration. En mode
       # autonome, l'API reste donc accessible seulement depuis l'hôte.
-      - "127.0.0.1:3001:3001"
+      - "127.0.0.1:${PORT:-3001}:${PORT:-3001}"
     environment:
       # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
       # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
       # seul schéma ("public", le défaut PostgreSQL).
       DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER doit être définie dans .env}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini dans .env}
-      JWT_DUREE_DE_VIE_HEURES: "24"
-      PORT: "3001"
-      RUST_LOG: info
+      JWT_DUREE_DE_VIE_HEURES: ${JWT_DUREE_DE_VIE_HEURES:-24}
+      PORT: ${PORT:-3001}
+      RUST_LOG: ${RUST_LOG:-info}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
     depends_on:
       postgres:

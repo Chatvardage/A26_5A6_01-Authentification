@@ -36,6 +36,13 @@ pub struct AdministrateurEtAutreUtilisateur {
     pub id_utilisateur_cible: uuid::Uuid,
 }
 
+/// Extracteur de changement de rôle : le compte cible est chargé et doit
+/// être non-admin avant l'extraction du corps JSON.
+pub struct AdministrateurEtUtilisateurNonAdmin {
+    pub session: UtilisateurAuthentifie,
+    pub id_utilisateur_cible: uuid::Uuid,
+}
+
 // Dans axum 0.7, le trait `FromRequestParts` est lui-même défini avec la
 // macro `#[async_trait]` (pas encore l'"async fn in trait" natif de Rust,
 // qui n'arrivera dans axum qu'à partir de la version 0.8). Le compilateur
@@ -117,6 +124,38 @@ impl FromRequestParts<AppState> for AdministrateurEtAutreUtilisateur {
         if session.id_utilisateur == id_utilisateur_cible {
             return Err(AppError::Interdit(
                 "un administrateur ne peut pas modifier, changer le rôle ou supprimer son propre compte via /api/users".into(),
+            ));
+        }
+
+        Ok(Self {
+            session,
+            id_utilisateur_cible,
+        })
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AdministrateurEtUtilisateurNonAdmin {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AdministrateurEtAutreUtilisateur {
+            session,
+            id_utilisateur_cible,
+        } = AdministrateurEtAutreUtilisateur::from_request_parts(parts, state).await?;
+        let utilisateur = state
+            .depot_utilisateurs
+            .trouver_par_id(id_utilisateur_cible)
+            .await
+            .map_err(|e| AppError::Interne(e.to_string()))?
+            .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+        if utilisateur.role() == Role::Admin {
+            return Err(AppError::Interdit(
+                "le rôle d'un administrateur ne peut pas être modifié".into(),
             ));
         }
 

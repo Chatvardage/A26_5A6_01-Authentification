@@ -271,8 +271,11 @@ Retourne un compte précis par son id.
 
 Modifie le pseudo et/ou le courriel d'un autre compte (équivalent
 administrateur de `PATCH /api/auth/me`, sans exiger le mot de passe
-actuel). Pour changer le mot de passe d'un compte, ou pour changer un
-rôle, voir les routes dédiées ci-dessous.
+actuel). Pour changer un rôle, voir `PATCH /api/users/{id}/role`
+ci-dessous — il n'existe **pas** de route permettant à un admin de
+changer le mot de passe d'un autre compte (hors de la portée de ce
+contrôle ; seul le propriétaire du compte peut le faire, via `PATCH
+/api/auth/me`).
 
 **Corps de la requête** (au moins un champ requis)
 

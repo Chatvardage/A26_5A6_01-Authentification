@@ -3,15 +3,16 @@
 //! `docker-compose.yml` en conteneur — le code ne change pas selon
 //! l'environnement, seule la source des valeurs change.
 
-/// Longueur minimale acceptée pour `JWT_SECRET` (128 bits si le secret
-/// est aussi aléatoire que long). `std::env::var` réussit dès que la
-/// variable existe, même vide (ex. `.env.example` copié sans être
+/// Longueur minimale acceptée pour `JWT_SECRET` (256 bits si le secret
+/// est aussi aléatoire que long — la taille de sortie native de HMAC-SHA256,
+/// l'algorithme par défaut de `jsonwebtoken`). `std::env::var` réussit dès
+/// que la variable existe, même vide (ex. `.env.example` copié sans être
 /// rempli) : sans ce plancher, le service démarrerait normalement mais
 /// signerait tous les jetons avec une clé HMAC vide ou trivialement
 /// devinable — un secret faible compromet silencieusement TOUTE
 /// l'authentification, contrairement à une `DATABASE_URL` invalide (qui
 /// empêche déjà le démarrage en échouant la connexion PostgreSQL).
-const LONGUEUR_MIN_JWT_SECRET: usize = 16;
+const LONGUEUR_MIN_JWT_SECRET: usize = 32;
 
 /// Bornes acceptées pour `JWT_DUREE_DE_VIE_HEURES`. Deux raisons distinctes :
 ///
@@ -170,11 +171,11 @@ mod tests {
     // pendant le développement — voir `.env.example`) ne peut donc pas
     // perturber ces tests en fournissant une valeur de secours.
 
-    /// 16 caractères pile — la longueur minimale acceptée
+    /// 32 caractères pile — la longueur minimale acceptée
     /// (`LONGUEUR_MIN_JWT_SECRET`) — pour que les tests "valeur valide"
     /// restent un cas limite significatif, pas une valeur confortablement
     /// au-dessus du seuil qui ne le testerait pas vraiment.
-    const SECRET_VALIDE: &str = "0123456789abcdef";
+    const SECRET_VALIDE: &str = "0123456789abcdef0123456789abcdef";
 
     #[test]
     fn utilise_les_valeurs_par_defaut_si_absentes() {
@@ -300,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "JWT_SECRET doit contenir au moins 16 caractères")]
+    #[should_panic(expected = "JWT_SECRET doit contenir au moins 32 caractères")]
     fn panique_si_jwt_secret_vide() {
         avec_env(
             &[
@@ -314,13 +315,13 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "JWT_SECRET doit contenir au moins 16 caractères")]
+    #[should_panic(expected = "JWT_SECRET doit contenir au moins 32 caractères")]
     fn panique_si_jwt_secret_trop_court() {
         avec_env(
             &[
                 ("DATABASE_URL", Some("postgres://x/y")),
-                // 15 caractères : un de moins que le minimum accepté.
-                ("JWT_SECRET", Some("012345678901234")),
+                // 31 caractères : un de moins que le minimum accepté.
+                ("JWT_SECRET", Some("0123456789abcdef0123456789abcde")),
             ],
             || {
                 let _ = Config::depuis_variables_environnement();

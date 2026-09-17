@@ -213,7 +213,7 @@ auth-service:
 Règles à respecter :
 
 - utiliser le nom du service Docker (`postgres`), jamais `localhost`, pour joindre la base depuis l'intérieur du conteneur;
-- ne jamais committer de vrais secrets — `JWT_SECRET` et les mots de passe de dev restent dans `.env`/`.env.example`, jamais en dur dans un fichier versionné; `JWT_SECRET` doit toujours faire au moins 16 caractères (le service refuse de démarrer sinon, voir `config.rs`) — une variable présente mais vide (ex. `.env.example` copié sans être rempli) signerait sinon tous les jetons avec une clé triviale;
+- ne jamais committer de vrais secrets — `JWT_SECRET` et les mots de passe de dev restent dans `.env`/`.env.example`, jamais en dur dans un fichier versionné; `JWT_SECRET` doit toujours faire au moins 32 caractères (256 bits, voir `config.rs`) — le service refuse de démarrer sinon — une variable présente mais vide (ex. `.env.example` copié sans être rempli) signerait sinon tous les jetons avec une clé triviale;
 - les dépôts doivent être clonés côte à côte (`.../A26_5A6_01-Infra` et `.../A26_5A6_01-Authentification`) pour que le `context: ../A26_5A6_01-Authentification` fonctionne;
 - le `docker-compose.yml` de **ce** dépôt sert uniquement au développement local autonome — ce n'est pas celui utilisé par `infra`.
 

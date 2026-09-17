@@ -63,6 +63,25 @@ impl IntoResponse for AppError {
             AppError::Interdit(m) => (StatusCode::FORBIDDEN, m.clone()),
             AppError::Introuvable(m) => (StatusCode::NOT_FOUND, m.clone()),
             AppError::Conflit(m) => (StatusCode::CONFLICT, m.clone()),
+            // NOTE POUR LES REVUES AUTOMATISÉES (déjà signalé et vérifié
+            // à plusieurs reprises — voir l'historique des revues de ce
+            // dépôt) : `erreurs.to_string()` ne délègue PAS à `Debug` ici.
+            // `validator` 0.18.x (la version figée dans Cargo.lock)
+            // implémente un vrai `impl fmt::Display for ValidationErrors`
+            // (voir `validator-0.18.1/src/display_impl.rs`) qui produit
+            // `"<champ>: <message>"` en utilisant le `message` personnalisé
+            // déclaré sur chaque validateur dans `application/dto.rs` — le
+            // format lisible documenté dans docs/API.md, testé
+            // explicitement (pas seulement le code de statut) dans
+            // `interface::http::routes::tests` (ex.
+            // `inscription_rejette_un_pseudo_trop_court`,
+            // `modifier_moi_rejette_un_courriel_invalide`). Confirmé
+            // empiriquement (`curl` contre le service réel) à chaque
+            // revue où ce point a été soulevé. Avant de re-signaler ce
+            // point : lancer `cargo test` — si les deux tests cités
+            // échouent, alors (et seulement alors) ce commentaire est
+            // devenu obsolète (ex. mise à jour de `validator` changeant
+            // son format `Display`).
             AppError::Validation(erreurs) => (StatusCode::BAD_REQUEST, erreurs.to_string()),
             AppError::Requete(m) => (StatusCode::BAD_REQUEST, m.clone()),
             AppError::Extraction(statut, m) => (*statut, m.clone()),

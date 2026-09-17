@@ -52,18 +52,34 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         )
         .route("/:id/role", patch(utilisateurs_controller::changer_role));
 
+    // Permissif par défaut (dev solo, voir doc de `construire` ci-dessus) —
+    // mais jamais *silencieusement* permissif quand `CORS_ALLOWED_ORIGINS`
+    // était censée restreindre l'accès : une infra qui pense avoir
+    // configuré une liste blanche mérite de savoir, dans ses logs, que ce
+    // n'est en réalité pas le cas (variable vide après nettoyage, ex.
+    // `CORS_ALLOWED_ORIGINS=,,,`, ou aucune origine survivant au parsing).
+    // Cohérent avec `config::lire_var_numerique`, qui journalise de la
+    // même façon une variable d'environnement mal formée.
+    let cors_permissif = || {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
     let cors = match origines_autorisees {
-        Some(origines) if !origines.is_empty() => {
+        None => cors_permissif(),
+        Some([]) => {
+            tracing::warn!(
+                "CORS_ALLOWED_ORIGINS est définie mais ne contient aucune origine (ex. \
+                 \"CORS_ALLOWED_ORIGINS=,,,\") — CORS reste permissif (Access-Control-Allow-Origin: *), \
+                 probablement pas l'intention"
+            );
+            cors_permissif()
+        }
+        Some(origines) => {
             // Une origine qui ne parse pas est écartée (pas de panique
-            // pour une simple faute de frappe dans `CORS_ALLOWED_ORIGINS`),
-            // mais jamais silencieusement : sans cet avertissement, une
-            // faute de frappe disparaîtrait sans laisser de trace — voire,
-            // si TOUTES les origines fournies échouaient, refermerait
-            // complètement le CORS sans qu'aucun message n'explique
-            // pourquoi (comportement bien différent du mode permissif
-            // attendu par défaut). Cohérent avec
-            // `config::lire_var_numerique`, qui journalise de la même
-            // façon une variable d'environnement mal formée.
+            // pour une simple faute de frappe), mais jamais
+            // silencieusement.
             let valeurs: Vec<_> = origines
                 .iter()
                 .filter_map(|o| match o.parse() {
@@ -77,16 +93,19 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
                     }
                 })
                 .collect();
-            CorsLayer::new()
-                .allow_origin(AllowOrigin::list(valeurs))
-                .allow_methods(Any)
-                .allow_headers(Any)
+            if valeurs.is_empty() {
+                tracing::warn!(
+                    "CORS_ALLOWED_ORIGINS: aucune origine valide après filtrage — CORS reste \
+                     permissif (Access-Control-Allow-Origin: *), probablement pas l'intention"
+                );
+                cors_permissif()
+            } else {
+                CorsLayer::new()
+                    .allow_origin(AllowOrigin::list(valeurs))
+                    .allow_methods(Any)
+                    .allow_headers(Any)
+            }
         }
-        // Permissif par défaut (dev solo, voir doc de `construire` ci-dessus).
-        _ => CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any),
     };
 
     Router::new()
@@ -405,6 +424,59 @@ mod tests {
                 .unwrap(),
             "http://exemple-autorise.test"
         );
+    }
+
+    /// Construit un contexte + Router avec une liste d'origines CORS
+    /// donnée, sans passer par `nouveau_contexte()` (qui force `None`).
+    fn app_avec_origines(origines: &[String]) -> Router {
+        let depot: Arc<dyn UtilisateurRepositoryPort> = Arc::new(FakeUtilisateurRepository::new());
+        let jwt_service = Arc::new(JwtService::new("secret-de-test".to_string(), 24));
+        let auth_service = AuthService::new(depot.clone(), jwt_service.clone());
+        let state = AppState {
+            auth_service,
+            depot_utilisateurs: depot,
+            jwt_service,
+        };
+        construire(state, Some(origines))
+    }
+
+    /// Retourne `true` si une réponse à `GET /health` avec l'en-tête
+    /// `Origin` donné porte `Access-Control-Allow-Origin: *` (CORS
+    /// permissif).
+    async fn cors_est_permissif(app: Router, origine_testee: &str) -> bool {
+        let reponse = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("Origin", origine_testee)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        reponse.headers().get("access-control-allow-origin") == Some(&"*".parse().unwrap())
+    }
+
+    #[tokio::test]
+    async fn cors_retombe_en_mode_permissif_si_la_liste_est_vide_apres_nettoyage() {
+        // Simule `CORS_ALLOWED_ORIGINS=,,,` : `config.rs` filtre déjà les
+        // entrées vides, donnant `Some(vec![])` — distinct de `None`
+        // (variable absente). Les deux doivent retomber sur le mode
+        // permissif, mais celui-ci doit journaliser un avertissement (non
+        // vérifiable directement ici sans abonné `tracing` de capture,
+        // voir le commentaire dans `construire`).
+        let app = app_avec_origines(&[]);
+        assert!(cors_est_permissif(app, "http://nimporte-quoi.test").await);
+    }
+
+    #[tokio::test]
+    async fn cors_retombe_en_mode_permissif_si_toutes_les_origines_sont_invalides() {
+        let origines = vec![
+            "origine\ninvalide".to_string(),
+            "encore\ninvalide".to_string(),
+        ];
+        let app = app_avec_origines(&origines);
+        assert!(cors_est_permissif(app, "http://nimporte-quoi.test").await);
     }
 
     #[tokio::test]

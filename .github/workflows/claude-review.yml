@@ -1,32 +1,72 @@
-name: Claude Automated Code Review
+name: Automated PR Review
+
 on:
   pull_request:
     types: [opened, synchronize]
+
 permissions:
   contents: read
-  issues: write
   pull-requests: write
+
 jobs:
-  review:
+  claude-review:
     runs-on: ubuntu-latest
+    outputs:
+      fallback_required: ${{ steps.review.outputs.fallback_required }}
+
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code@2.1.274
-      - name: Run Claude Review
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run Claude review
+        id: review
         env:
+          ANTHROPIC_MODEL: claude-sonnet-4-6
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          ANTHROPIC_MODEL: "claude-sonnet-4-6"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Capture the changes made in this PR
-          git diff ${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }} > /tmp/diff.txt
+          git diff "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > /tmp/diff.txt
+          if claude --print "Review this git diff for code quality, bugs, performance, and security issues. Format your feedback as clean markdown comments referencing the files. Check API.md, AGENTS.md, README.md, and anything in /docs for reference. Formulate your review in French." < /tmp/diff.txt > /tmp/review.md && test -s /tmp/review.md; then
+            gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/review.md
+            echo "fallback_required=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Claude review failed; starting the Copilot fallback."
+            echo "fallback_required=true" >> "$GITHUB_OUTPUT"
+          fi
 
-          # Ask Claude to review the diff — diff is piped via stdin, not inlined into argv
-          claude --print "Review this git diff for code quality, bugs, performance, and security issues. Format your feedback as clean markdown comments referencing the files. Check the API.md, AGENTS.md, README.md and anything in /docs for reference. Formulate your review in french." < /tmp/diff.txt > /tmp/review.md
+  copilot-fallback-review:
+    needs: claude-review
+    if: ${{ needs.claude-review.outputs.fallback_required == 'true' }}
+    runs-on: ubuntu-latest
 
-          # Post the review back to the PR — --body-file avoids the same argv-length risk
-          gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run Copilot fallback review
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_REVIEW_TOKEN }}
+        run: |
+          git diff "${{ github.event.pull_request.base.sha }}...${{ github.event.pull_request.head.sha }}" > /tmp/diff.txt
+          copilot --silent --stream off --disable-builtin-mcps --available-tools= -p "Review this git diff for code quality, bugs, performance, and security issues. Format your feedback as clean markdown comments referencing the files. Check the API.md, AGENTS.md, README.md and anything in /docs for reference. Formulate your review in french. Do not explain your process, use tools, modify files, or call GitHub APIs." < /tmp/diff.txt > /tmp/review.md
+          test -s /tmp/review.md
+
+      - name: Post Copilot review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file /tmp/review.md

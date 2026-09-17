@@ -485,6 +485,17 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
   concernée qu'à sa prochaine connexion. Acceptable pour la portée du
   contrôle (24h de durée de vie par défaut) ; une liste de révocation ou
   des jetons de plus courte durée seraient la piste d'amélioration.
+- **Énumération de comptes possible via `POST /api/auth/register`** :
+  `connecter` investit un effort réel pour empêcher l'énumération à la
+  connexion (hachage factice à temps constant, message générique — voir
+  `AuthService::connecter`), mais `inscrire` renvoie un `409` explicite si
+  le pseudo ou le courriel existe déjà, ce qui permet de tester si un
+  courriel est déjà enregistré en essayant de s'y inscrire. C'est un
+  compromis courant (accepté par beaucoup de services pour l'UX à
+  l'inscription — un message "courriel déjà utilisé" immédiat plutôt
+  qu'un envoi de courriel de vérification systématique), assumé
+  consciemment ici plutôt que corrigé, faute d'un flux de vérification par
+  courriel qui serait hors de la portée de ce contrôle.
 
 ### Note sur la vérification de ce projet
 

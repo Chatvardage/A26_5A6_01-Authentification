@@ -64,9 +64,18 @@ impl AuthService {
     pub async fn connecter(&self, requete: ConnexionRequest) -> Result<AuthResponse, AppError> {
         requete.validate().map_err(AppError::Validation)?;
 
+        // `.trim()` : un espace de tête/fin (copié-collé fréquent d'un
+        // courriel) ne doit pas faire échouer la connexion alors que le
+        // compte existe bel et bien — cohérent avec `normaliser_courriel`
+        // (utilisée à l'inscription/modification), qui trim aussi. On ne
+        // touche qu'aux espaces, jamais à la casse : `identifiant` peut
+        // être un pseudo (sensible à la casse) ou un courriel
+        // (insensible, déjà géré par `LOWER($1)` côté SQL).
+        let identifiant = requete.identifiant.trim();
+
         let utilisateur = self
             .depot
-            .trouver_par_identifiant(&requete.identifiant)
+            .trouver_par_identifiant(identifiant)
             .await
             .map_err(|e| AppError::Interne(e.to_string()))?;
 

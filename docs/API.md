@@ -65,6 +65,15 @@ handlers utilisent des extracteurs `Json`/`Path` personnalisés
 d'extraction axum vers cette même enveloppe, plutôt que le corps en texte
 brut renvoyé par défaut par `axum::extract::Json`/`Path`.
 
+Pour une erreur de validation `validator` (`application/dto.rs`), le
+message a la forme `"<champ>: <message>"` (ex. `"pseudo: le pseudo doit
+contenir entre 3 et 20 caractères"`), en utilisant le `message`
+personnalisé déclaré sur chaque validateur — jamais le format technique
+brut de la crate `validator` (noms de types Rust, codes internes). Testé
+explicitement dans `interface::http::routes` (pas seulement le code de
+statut) pour éviter qu'un message oublié sur un futur validateur ne
+dégrade silencieusement ce contrat.
+
 | Code | Signification |
 |------|----------------|
 | 400  | Requête invalide (validation échouée : champ manquant, format incorrect, JSON malformé) |

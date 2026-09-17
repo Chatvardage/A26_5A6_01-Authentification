@@ -54,7 +54,29 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
 
     let cors = match origines_autorisees {
         Some(origines) if !origines.is_empty() => {
-            let valeurs: Vec<_> = origines.iter().filter_map(|o| o.parse().ok()).collect();
+            // Une origine qui ne parse pas est écartée (pas de panique
+            // pour une simple faute de frappe dans `CORS_ALLOWED_ORIGINS`),
+            // mais jamais silencieusement : sans cet avertissement, une
+            // faute de frappe disparaîtrait sans laisser de trace — voire,
+            // si TOUTES les origines fournies échouaient, refermerait
+            // complètement le CORS sans qu'aucun message n'explique
+            // pourquoi (comportement bien différent du mode permissif
+            // attendu par défaut). Cohérent avec
+            // `config::lire_var_numerique`, qui journalise de la même
+            // façon une variable d'environnement mal formée.
+            let valeurs: Vec<_> = origines
+                .iter()
+                .filter_map(|o| match o.parse() {
+                    Ok(valeur) => Some(valeur),
+                    Err(_) => {
+                        tracing::warn!(
+                            origine = o,
+                            "CORS_ALLOWED_ORIGINS: origine invalide, ignorée"
+                        );
+                        None
+                    }
+                })
+                .collect();
             CorsLayer::new()
                 .allow_origin(AllowOrigin::list(valeurs))
                 .allow_methods(Any)
@@ -348,6 +370,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn cors_ignore_une_origine_invalide_sans_bloquer_les_autres() {
+        let depot: Arc<dyn UtilisateurRepositoryPort> = Arc::new(FakeUtilisateurRepository::new());
+        let jwt_service = Arc::new(JwtService::new("secret-de-test".to_string(), 24));
+        let auth_service = AuthService::new(depot.clone(), jwt_service.clone());
+        let state = AppState {
+            auth_service,
+            depot_utilisateurs: depot,
+            jwt_service,
+        };
+        // Un caractère de contrôle (retour à la ligne) ne parse jamais en
+        // `HeaderValue` valide — simule une faute de frappe dans
+        // `CORS_ALLOWED_ORIGINS` (voir le `tracing::warn!` dans `construire`).
+        let origines = vec![
+            "http://exemple-autorise.test".to_string(),
+            "origine\ninvalide".to_string(),
+        ];
+        let app = construire(state, Some(&origines));
+
+        let reponse = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header("Origin", "http://exemple-autorise.test")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            reponse
+                .headers()
+                .get("access-control-allow-origin")
+                .unwrap(),
+            "http://exemple-autorise.test"
+        );
+    }
+
+    #[tokio::test]
     async fn corps_de_requete_trop_volumineux_est_refuse() {
         let ctx = nouveau_contexte();
         // Dépasse LIMITE_CORPS_REQUETE_OCTETS (16 Kio) — un mot de passe
@@ -397,7 +457,7 @@ mod tests {
     #[tokio::test]
     async fn inscription_rejette_un_pseudo_trop_court() {
         let ctx = nouveau_contexte();
-        let (statut, _) = requete(
+        let (statut, corps) = requete(
             &ctx.app,
             "POST",
             "/api/auth/register",
@@ -406,6 +466,16 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
+        // Vérifie le *contenu*, pas seulement le statut : `validator::ValidationErrors`
+        // implémente `Display` en utilisant le `message` personnalisé de
+        // chaque champ (voir `application/dto.rs`) — mais retomberait sur un
+        // format technique illisible (`Validation error: length [...]`) si
+        // un message venait à être retiré par erreur. Ce test empêche une
+        // telle régression de passer inaperçue.
+        assert_eq!(
+            corps["erreur"],
+            "pseudo: le pseudo doit contenir entre 3 et 20 caractères"
+        );
     }
 
     #[tokio::test]
@@ -459,6 +529,26 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::OK);
         assert_eq!(corps["utilisateur"]["courriel"], "alice@example.com");
+    }
+
+    #[tokio::test]
+    async fn connexion_ignore_les_espaces_de_tete_et_de_fin_de_lidentifiant() {
+        let ctx = nouveau_contexte();
+        inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        // Copié-collé fréquent d'un courriel : un espace de tête/fin ne
+        // doit pas faire échouer la connexion.
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(
+                json!({ "identifiant": "  alice@example.com  ", "mot_de_passe": "motdepasse123" }),
+            ),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
     }
 
     #[tokio::test]
@@ -827,7 +917,7 @@ mod tests {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
-        let (statut, _) = requete(
+        let (statut, corps) = requete(
             &ctx.app,
             "PATCH",
             "/api/auth/me",
@@ -836,6 +926,7 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(corps["erreur"], "courriel: adresse courriel invalide");
     }
 
     #[tokio::test]

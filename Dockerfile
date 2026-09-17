@@ -44,7 +44,7 @@ FROM node:20-bookworm-slim AS node-deps
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev --ignore-scripts
+RUN npm ci
 
 # `npx prisma generate` : symbolique ici (ce service n'utilise jamais de
 # client Prisma au runtime — voir prisma/schema.prisma et

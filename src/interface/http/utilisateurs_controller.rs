@@ -12,9 +12,9 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 use super::extracteurs::{Json, Path};
-use super::middleware::AdministrateurAuthentifie;
+use super::middleware::{AdministrateurAuthentifie, AdministrateurEtAutreUtilisateur};
 
-/// GET /api/users — liste tous les comptes (admin uniquement).
+/// GET /api/users — liste au plus 100 comptes (admin uniquement).
 pub async fn lister(
     State(state): State<AppState>,
     AdministrateurAuthentifie(_session): AdministrateurAuthentifie,
@@ -68,12 +68,12 @@ pub async fn obtenir(
 /// (admin uniquement, sans toucher au mot de passe ni au rôle).
 pub async fn modifier(
     State(state): State<AppState>,
-    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
-    Path(id): Path<Uuid>,
+    AdministrateurEtAutreUtilisateur {
+        session,
+        id_utilisateur_cible: id,
+    }: AdministrateurEtAutreUtilisateur,
     Json(requete): Json<ModifierUtilisateurRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
-
     let utilisateur = state.auth_service.modifier_utilisateur(id, requete).await?;
     tracing::info!(admin = %session.pseudo, cible = %id, "compte modifié par un administrateur");
     Ok(ReponseJson(utilisateur))
@@ -82,11 +82,11 @@ pub async fn modifier(
 /// DELETE /api/users/:id — supprime un compte (admin uniquement).
 pub async fn supprimer(
     State(state): State<AppState>,
-    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
-    Path(id): Path<Uuid>,
+    AdministrateurEtAutreUtilisateur {
+        session,
+        id_utilisateur_cible: id,
+    }: AdministrateurEtAutreUtilisateur,
 ) -> Result<StatusCode, AppError> {
-    exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
-
     let supprime = state
         .depot_utilisateurs
         .supprimer(id)
@@ -105,8 +105,10 @@ pub async fn supprimer(
 /// uniquement). Permet de promouvoir un utilisateur en modérateur/admin.
 pub async fn changer_role(
     State(state): State<AppState>,
-    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
-    Path(id): Path<Uuid>,
+    AdministrateurEtAutreUtilisateur {
+        session,
+        id_utilisateur_cible: id,
+    }: AdministrateurEtAutreUtilisateur,
     Json(requete): Json<ChangerRoleRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
     let utilisateur = state
@@ -125,17 +127,4 @@ pub async fn changer_role(
         "rôle modifié par un administrateur"
     );
     Ok(ReponseJson(utilisateur))
-}
-
-fn exiger_un_autre_utilisateur(
-    id_utilisateur_connecte: Uuid,
-    id_utilisateur_cible: Uuid,
-) -> Result<(), AppError> {
-    if id_utilisateur_cible == id_utilisateur_connecte {
-        Err(AppError::Interdit(
-            "utilisez /api/auth/me pour modifier ou supprimer votre propre compte".into(),
-        ))
-    } else {
-        Ok(())
-    }
 }

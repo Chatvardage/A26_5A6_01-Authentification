@@ -742,6 +742,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn connexion_rejette_un_identifiant_uniquement_compose_despaces() {
+        let ctx = nouveau_contexte();
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({
+                "identifiant": "   ",
+                "mot_de_passe": "motdepasse123",
+            })),
+        )
+        .await;
+
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "identifiant requis (254 caractères maximum)"
+        );
+    }
+
+    #[tokio::test]
     async fn connexion_avec_erreur_de_stockage_retourne_500() {
         let ctx = nouveau_contexte();
         inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
@@ -1363,6 +1386,32 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_ne_peut_pas_modifier_son_propre_compte_avec_un_corps_invalide() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        let reponse = ctx
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri(format!("/api/users/{id_admin}"))
+                    .header("Authorization", format!("Bearer {jeton_admin}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("pas-du-json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(reponse.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

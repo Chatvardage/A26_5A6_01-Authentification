@@ -34,7 +34,7 @@ services:
     volumes:
       - auth-db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U chatvardage -d chatvardage_auth"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -52,7 +52,7 @@ services:
       # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
       # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
       # seul schéma ("public", le défaut PostgreSQL).
-      DATABASE_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER doit être défini dans .env}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini dans .env}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB doit être défini dans .env}
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER doit être définie dans .env}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini dans .env}
       JWT_DUREE_DE_VIE_HEURES: "24"
       PORT: "3001"

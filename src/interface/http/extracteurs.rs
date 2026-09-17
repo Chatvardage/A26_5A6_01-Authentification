@@ -92,8 +92,8 @@ where
     }
 }
 
-fn mapper_rejet_path(_rejet: PathRejection) -> AppError {
+fn mapper_rejet_path(rejet: PathRejection) -> AppError {
     // Axum retourne déjà 400 pour les erreurs de désérialisation des segments
     // d'URL; on conserve ce statut, mais pas son message technique.
-    AppError::Extraction(_rejet.status(), "paramètre d'URL invalide".into())
+    AppError::Extraction(rejet.status(), "paramètre d'URL invalide".into())
 }

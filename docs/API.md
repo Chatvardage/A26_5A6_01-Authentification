@@ -34,7 +34,7 @@ finalement distinguer les deux.
 | Créer un compte (inscription) | ✅ (le sien, `/register`) | ✅ (le sien, `/register`) |
 | Lire son propre profil | ✅ `GET /api/auth/me` | ✅ `GET /api/auth/me` |
 | Lire le profil d'un autre utilisateur | ❌ | ✅ `GET /api/users/{id}` |
-| Lister tous les comptes | ❌ | ✅ `GET /api/users` |
+| Lister jusqu'à 100 comptes récents | ❌ | ✅ `GET /api/users` |
 | Créer un compte | ❌ | ✅ `POST /api/users` |
 | Modifier son propre profil (pseudo/courriel/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
 | Modifier le profil d'un autre utilisateur | ❌ | ✅ `PATCH /api/users/{id}` |
@@ -269,7 +269,9 @@ invalide.
 
 ### GET /api/users 🔒👑
 
-Liste tous les comptes inscrits.
+Liste au plus les 100 comptes les plus récents, triés par `cree_le`
+décroissant. La pagination complète est hors de la portée actuelle du
+service.
 
 **Réponse `200`** : tableau d'objets utilisateur (même forme que `GET /api/auth/me`).
 

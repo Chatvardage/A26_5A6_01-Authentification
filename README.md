@@ -221,6 +221,11 @@ il ne remplace pas SQLx et n'est pas une dépendance du binaire Rust.
 
 ## Prérequis
 
+> **Note sur `zmij` dans `Cargo.lock` :** `zmij` est une dépendance réelle
+> de `serde_json` dans la version verrouillée par Cargo. Son entrée est
+> générée par le gestionnaire de dépendances et ne doit pas être supprimée
+> ou modifiée manuellement.
+
 **Rien à installer localement pour faire tourner le service** à part
 Docker (conforme à la consigne du contrôle) — les migrations Prisma
 peuvent aussi être appliquées dans un conteneur (voir
@@ -353,6 +358,12 @@ Résumé :
 | `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
 
 ## Vérifier que ça fonctionne
+
+Dans le Compose autonome, `DATABASE_URL_DOCKER` est l'URI complète utilisée
+par `auth-api`; elle doit employer l'hôte `postgres`. Les caractères réservés
+dans un nom ou mot de passe (`@`, `:`, `/`, `?`, `#`, etc.) doivent être
+encodés en pourcentage dans cette URI, afin qu'ils ne soient jamais
+interprétés comme de la syntaxe d'URL.
 
 ```bash
 # Santé du service (confirme aussi indirectement que la connexion à

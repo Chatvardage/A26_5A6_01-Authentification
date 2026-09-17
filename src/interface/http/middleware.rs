@@ -15,6 +15,8 @@ use crate::domain::utilisateur::{Role, UtilisateurPublic};
 use crate::error::AppError;
 use crate::state::AppState;
 
+use super::extracteurs::Path;
+
 pub struct UtilisateurAuthentifie {
     pub id_utilisateur: uuid::Uuid,
     pub pseudo: String,
@@ -26,6 +28,13 @@ pub struct UtilisateurAuthentifie {
 /// intervient pendant l'extraction des parties de requête, avant `Path` et
 /// surtout avant tout extracteur du corps comme `Json`.
 pub struct AdministrateurAuthentifie(pub UtilisateurAuthentifie);
+
+/// Extracteur des routes d'administration qui ciblent un autre compte.
+/// Il refuse un auto-ciblage avant l'extraction d'un corps JSON.
+pub struct AdministrateurEtAutreUtilisateur {
+    pub session: UtilisateurAuthentifie,
+    pub id_utilisateur_cible: uuid::Uuid,
+}
 
 // Dans axum 0.7, le trait `FromRequestParts` est lui-même défini avec la
 // macro `#[async_trait]` (pas encore l'"async fn in trait" natif de Rust,
@@ -89,6 +98,32 @@ impl FromRequestParts<AppState> for AdministrateurAuthentifie {
         let utilisateur = UtilisateurAuthentifie::from_request_parts(parts, state).await?;
         exiger_admin(utilisateur.role)?;
         Ok(Self(utilisateur))
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AdministrateurEtAutreUtilisateur {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let AdministrateurAuthentifie(session) =
+            AdministrateurAuthentifie::from_request_parts(parts, state).await?;
+        let Path(id_utilisateur_cible) =
+            Path::<uuid::Uuid>::from_request_parts(parts, state).await?;
+
+        if session.id_utilisateur == id_utilisateur_cible {
+            return Err(AppError::Interdit(
+                "un administrateur ne peut pas modifier, changer le rôle ou supprimer son propre compte via /api/users".into(),
+            ));
+        }
+
+        Ok(Self {
+            session,
+            id_utilisateur_cible,
+        })
     }
 }
 

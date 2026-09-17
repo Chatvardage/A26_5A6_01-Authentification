@@ -91,6 +91,11 @@ impl AuthService {
         // être un pseudo (sensible à la casse) ou un courriel
         // (insensible, déjà géré par `LOWER($1)` côté SQL).
         let identifiant = requete.identifiant.trim();
+        if identifiant.is_empty() {
+            return Err(AppError::Requete(
+                "identifiant requis (254 caractères maximum)".into(),
+            ));
+        }
 
         let utilisateur = self
             .depot

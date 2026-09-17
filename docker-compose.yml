@@ -28,7 +28,9 @@ services:
       POSTGRES_PASSWORD: chatvardage
       POSTGRES_DB: chatvardage_auth
     ports:
-      - "5432:5432"
+      # Base de développement accessible seulement depuis la machine hôte :
+      # les identifiants locaux ne doivent pas être publiés sur le réseau.
+      - "127.0.0.1:5432:5432"
     volumes:
       - auth-db-data:/var/lib/postgresql/data
     healthcheck:

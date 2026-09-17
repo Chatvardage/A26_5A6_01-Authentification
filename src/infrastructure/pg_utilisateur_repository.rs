@@ -102,8 +102,8 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             SET pseudo = COALESCE($2, pseudo),
                 courriel = COALESCE($3, courriel),
                 mot_de_passe_hache = COALESCE($4, mot_de_passe_hache),
-            version_auth = version_auth + CASE WHEN $4 IS NULL THEN 0 ELSE 1 END,
-            modifie_le = now()
+                version_auth = version_auth + CASE WHEN $4 IS NULL THEN 0 ELSE 1 END,
+                modifie_le = now()
             WHERE id = $1
             RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,

@@ -69,9 +69,9 @@ et [Installation et lancement](#installation-et-lancement)).
 | **PostgreSQL + SQLx** | Base relationnelle robuste pour des données structurées (comptes, rôles). SQLx est asynchrone (compatible avec Axum/Tokio) et n'exige pas d'ORM lourd. |
 | **Prisma (migrations uniquement)** | Standardise la gestion des migrations de schéma avec le reste de l'équipe (le Room-Service l'utilise aussi) — la CLI Prisma est indépendante du langage du service qui l'utilise. Aucun client Prisma généré n'est utilisé au runtime : SQLx reste le seul point d'accès aux données depuis le code Rust. |
 | **Port** (`UtilisateurRepositoryPort`) | Le code métier ne dépend que d'une interface (`domain::ports::UtilisateurRepositoryPort`), pas directement de PostgreSQL — même principe que `ChatGateway` côté frontend. Une seule implémentation en production, `PgUtilisateurRepository` (SQLx) ; il n'y a pas de mode mock exposé à l'exécution. Un second dépôt en mémoire (`FakeUtilisateurRepository`) existe, mais uniquement compilé en mode test (`#[cfg(test)]`) pour les tests HTTP de bout en bout — voir [Lancer les tests](#lancer-les-tests). |
-| **Argon2** | Algorithme de hachage de mot de passe recommandé actuellement (résiste mieux aux attaques par GPU que bcrypt/MD5/SHA simple). |
+| **Argon2** | Algorithme de hachage de mot de passe recommandé actuellement (résiste mieux aux attaques par GPU que bcrypt/MD5/SHA simple). Ses calculs CPU-bound sont exécutés dans le pool bloquant de Tokio afin de préserver les workers HTTP. |
 | **JWT (jsonwebtoken)** | Chaque requête porte un jeton signé, dont la signature et l'expiration sont vérifiées avant de relire l'utilisateur en base. Une suppression ou un changement de rôle prend donc effet immédiatement, sans stockage de session. |
-| **Docker multi-stage** | Une étape compile le binaire Rust, une autre installe la CLI Prisma (Node.js, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate` ; l'image finale (basée sur `node:20-bookworm-slim`) embarque le binaire Rust compilé, Node.js et `prisma/` pour exécuter `npx prisma migrate deploy` au démarrage avant de lancer le binaire — même séquence que les microservices Node de l'équipe (voir [Installation et lancement](#installation-et-lancement)), adaptée à un runtime Rust. |
+| **Docker multi-stage** | Une étape compile le binaire Rust avec `rust:1.88.0-slim-bookworm`, une autre installe la CLI Prisma avec `node:20.19.1-bookworm-slim` (Node.js et Prisma sont figés) et exécute `npx prisma generate` ; l'image finale embarque le binaire Rust compilé, Node.js et `prisma/` pour exécuter `npx prisma migrate deploy` au démarrage avant de lancer le binaire — même séquence que les microservices Node de l'équipe (voir [Installation et lancement](#installation-et-lancement)), adaptée à un runtime Rust. |
 
 ## Architecture du service
 
@@ -228,7 +228,7 @@ peuvent aussi être appliquées dans un conteneur (voir
 Pour développer/apprendre en dehors de Docker, ou pour créer/modifier une
 migration Prisma en local, il faut en plus :
 
-- [Rust](https://www.rust-lang.org/tools/install), **version 1.85 ou plus
+- [Rust](https://www.rust-lang.org/tools/install), **version 1.88 ou plus
   récente** — installe `cargo` et `rustc`. Vérifier avec `rustc --version` ;
   si c'est plus vieux, lancer `rustup update stable` (voir dépannage
   ci-dessous si `rustup` n'est pas installé).
@@ -241,16 +241,17 @@ migration Prisma en local, il faut en plus :
 - [Docker](https://www.docker.com/) et Docker Compose (v2, la commande
   `docker compose`, pas `docker-compose`).
 
-> **Pourquoi 1.85 précisément ?** Ce projet est écrit pour l'édition 2021
+> **Pourquoi 1.88 précisément ?** Ce projet est écrit pour l'édition 2021
 > (rien à voir avec ça), mais certaines dépendances *transitives* (des
 > crates utilisées par nos propres dépendances, pas ajoutées par nous —
 > ici `icu_provider`, tirée par la crate `url`) exigent depuis peu
 > l'édition Cargo `edition2024`, stabilisée seulement à partir de Rust
 > 1.85. Avec une version plus ancienne, `cargo build`/`cargo run` échoue
 > avec une erreur du type `feature 'edition2024' is required`. Le
-> `Dockerfile` utilise l'image `rust:1-slim-bookworm` (toujours la
-> dernière version stable) pour ne jamais avoir ce problème en Docker ;
-> c'est seulement en local, hors Docker, que ta version installée compte.
+> `Dockerfile` utilise l'image précisément versionnée
+> `rust:1.88.0-slim-bookworm`, qui satisfait ce prérequis et rend les builds
+> Docker reproductibles. C'est seulement en local, hors Docker, que ta
+> version installée compte.
 
 ## Installation et lancement
 
@@ -335,7 +336,7 @@ ces paquets système sont souvent en retard de plusieurs versions.
   Rust système) via le script officiel sur
   [rust-lang.org/tools/install](https://www.rust-lang.org/tools/install),
   puis d'ouvrir un nouveau terminal et de vérifier `rustc --version`
-  (doit afficher 1.85 ou plus).
+  (doit afficher 1.88 ou plus).
 
 ## Variables d'environnement
 

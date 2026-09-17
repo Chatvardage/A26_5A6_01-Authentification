@@ -3,13 +3,10 @@
 # ne garde que le binaire final dans une image finale basée sur Node.js
 # (étape 3, requise pour exécuter les migrations Prisma au démarrage).
 #
-# Le tag "1" (au lieu d'un numéro précis comme "1.82") pointe toujours
-# vers la dernière version stable de Rust 1.x. C'est important ici :
-# certaines dépendances transitives (ex. icu_provider, via la crate
-# `url`) exigent une édition Cargo ("edition2024") qui demande Rust
-# 1.85 ou plus récent — une version trop ancienne fait échouer le build
-# avec une erreur du genre "feature `edition2024` is required".
-FROM rust:1-slim-bookworm AS builder
+# Rust 1.88.0 satisfait le MSRV du projet (`rust-version = "1.88"`) et
+# les dépendances qui exigent l'édition Cargo 2024. Le tag précis rend le
+# build reproductible tout en gardant la base Debian Bookworm.
+FROM rust:1.88.0-slim-bookworm AS builder
 
 WORKDIR /app
 
@@ -39,7 +36,7 @@ RUN touch src/main.rs && cargo build --release
 # Étape séparée du build Rust : le cache Docker ne réinstalle les
 # dépendances npm que si package.json/package-lock.json changent, pas à
 # chaque modification du code Rust.
-FROM node:20-bookworm-slim AS node-deps
+FROM node:20.19.1-bookworm-slim AS node-deps
 
 WORKDIR /app
 
@@ -58,7 +55,7 @@ RUN npx prisma generate
 # Basée sur Node.js (pas une image Debian minimale) : le conteneur doit
 # exécuter `npx prisma migrate deploy` au démarrage, avant de lancer le
 # binaire Rust compilé à l'étape 1.
-FROM node:20-bookworm-slim
+FROM node:20.19.1-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

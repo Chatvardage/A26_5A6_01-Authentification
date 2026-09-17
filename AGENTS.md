@@ -28,12 +28,12 @@ Ce dépôt ne doit **pas** prendre en charge les salons, les messages privés, R
 
 ## Stack
 
-- Rust (édition 2021, 1.85+)
+- Rust (édition 2021, 1.88+)
 - Axum 0.7 (framework HTTP) + Tokio (runtime async)
 - SQLx 0.8 (client PostgreSQL async — requêtes/lecture-écriture au runtime)
 - Prisma (schéma + migrations de la table `utilisateurs`, versionnées dans `prisma/migrations/` — CLI Node.js seulement, version figée par `package.json`/`package-lock.json`, aucun client Prisma utilisé au runtime)
 - PostgreSQL (base `chatvardage_auth` en environnement d'équipe, provisionnée par `infra` — voir [Docker](#docker) ; base dédiée dans `docker-compose.yml` de ce dépôt seul. Pas de mode mock/en mémoire, ni en production ni dans les tests d'intégration — voir [Couverture obligatoire](#couverture-obligatoire))
-- Argon2 (hachage des mots de passe) + JWT via `jsonwebtoken`
+- Argon2 (hachage des mots de passe, exécuté via `tokio::task::spawn_blocking`) + JWT via `jsonwebtoken`
 - Docker / Docker Compose
 
 ## Responsabilités de l'authentification
@@ -135,7 +135,7 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 
 - `cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 99` doit passer — couverture des lignes ≥ 99 % (hors `main.rs`, voir ci-dessous).
 - `main.rs` est exclu du calcul : c'est l'assemblage final (config, pool PostgreSQL, serveur HTTP) — un point d'entrée d'intégration vérifié manuellement (`docker compose up`, voir README) plutôt que par des tests unitaires, comme c'est l'usage pour ce genre de fonction `main` en Rust.
-- Le reste du code atteint 100 % de couverture des lignes à deux branches défensives près : le chemin d'erreur de `jsonwebtoken::encode` (`infrastructure/jwt.rs`) et celui d'`Argon2::hash_password` (`infrastructure/mot_de_passe.rs`). Aucune entrée valide et raisonnable ne les déclenche ; les forcer artificiellement exigerait d'injecter une fausse implémentation uniquement pour gonfler le chiffre, sans garantie réelle en échange — ne pas ajouter une telle abstraction juste pour la couverture. Voir aussi la liste complète des `.expect()` défensifs (pas seulement liés à la couverture) dans la section [Lint, style et qualité](#lint-style-et-qualité) ci-dessous.
+- Le reste du code atteint 100 % de couverture des lignes à deux branches défensives près : le chemin d'erreur de `jsonwebtoken::encode` (`infrastructure/jwt.rs`) et celui d'`Argon2::hash_password` (`infrastructure/mot_de_passe.rs`). Aucune entrée valide et raisonnable ne les déclenche ; les forcer artificiellement exigerait d'injecter une fausse implémentation uniquement pour gonfler le chiffre, sans garantie réelle en échange — ne pas ajouter une telle abstraction juste pour la couverture.
 - Toute nouvelle branche de logique **atteignable** (succès, refus, erreurs métier) doit être accompagnée de tests plutôt que de faire baisser artificiellement le seuil.
 - Les tests HTTP de bout en bout (`interface/http/routes.rs`) utilisent `infrastructure::fake_utilisateur_repository::FakeUtilisateurRepository` — un dépôt en mémoire compilé uniquement en mode test (`#[cfg(test)]`), jamais exposé en production. Il expose `provoquer_erreur_interne(bool)` pour tester la branche 500 sans dépendre d'une vraie panne PostgreSQL.
 - Pour un rapport détaillé (voir quelles lignes manquent) : `cargo llvm-cov --ignore-filename-regex 'main\.rs' --html`, puis ouvrir `target/llvm-cov/html/index.html`.
@@ -146,7 +146,6 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 - Respecter `cargo fmt` et `cargo clippy` — aucun warning clippy ignoré sans justification en commentaire.
 - Éviter `unwrap()`/`expect()` dans le code de production en dehors de `main.rs` (démarrage) — utiliser `Result`/`?` et `AppError` (voir `error.rs`). Exceptions documentées, toutes sur des chemins garantis sûrs par construction plutôt que par simple probabilité (à ne pas confondre avec les branches d'erreur `Result`/`AppError` difficiles à couvrir listées dans [Couverture obligatoire](#couverture-obligatoire) — celles-ci gèrent déjà l'erreur proprement, sans `panic!`) :
   - `infrastructure/jwt.rs`, `generer_token` : `.expect(...)` sur `Duration::hours(n).checked_add_signed(...)` — exécuté à chaque connexion/inscription, mais `n` (`JWT_DUREE_DE_VIE_HEURES`) est bornée à `[1, 720]` par `config.rs` au démarrage (voir `JWT_DUREE_MAX_HEURES`), ce qui rend un débordement arithmétique impossible en pratique, pas seulement improbable.
-  - `application/auth_service.rs`, `hachage_factice()` : `.expect(...)` sur `hacher_mot_de_passe(constante_fixe)` — la chaîne hachée est une constante du code source (jamais une entrée utilisateur), Argon2 n'a aucune raison de la rejeter.
   - `config.rs`, `Config::depuis_variables_environnement()` : les `.expect(...)` sur `JWT_SECRET` et `DATABASE_URL`, ainsi que les `assert!(...)` sur la longueur du secret et les bornes de `JWT_DUREE_DE_VIE_HEURES`, arrêtent volontairement le processus avant de démarrer avec une configuration obligatoire absente ou dangereuse. Cette configuration est fournie au démarrage, jamais par une requête utilisateur, et chaque refus est couvert par les tests de `config.rs`.
   - Toute nouvelle exception doit être ajoutée à cette liste, pas laissée implicite dans un commentaire local seulement.
 - Garder les contrôleurs (`interface/http/*_controller.rs`) minces : extraction JSON/en-têtes et délégation au service.
@@ -155,6 +154,7 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 - Garder l'accès aux données derrière `domain::ports::UtilisateurRepositoryPort` — pas d'appel SQLx direct depuis `application/` ou `interface/`. Prisma n'est utilisé dans ce dépôt que pour le schéma et les migrations (`prisma/schema.prisma`) : aucun client Prisma n'est appelé au runtime, l'accès PostgreSQL passe uniquement par SQLx dans `infrastructure/pg_utilisateur_repository.rs`.
 - Réutiliser `exiger_admin` (`middleware.rs`) au lieu de dupliquer les règles de permission par rôle.
 - Valider les entrées avec `validator` sur les DTO (`application/dto.rs`) — toujours donner une longueur **maximale** à un champ texte fourni par le client (pas seulement un minimum), sans quoi un client peut envoyer des valeurs arbitrairement volumineuses qui seront quand même traitées (ex. hachées avec Argon2, délibérément coûteux en CPU) avant d'être rejetées ailleurs.
+- Exécuter toute opération CPU-bound (notamment Argon2) via `tokio::task::spawn_blocking` plutôt que directement sur un worker Tokio.
 - Retourner des erreurs HTTP explicites via `AppError`, jamais un `panic!` qui ferait planter le service.
 - Ne pas laisser de code mort, de `println!` de debug (utiliser `tracing::info!/warn!/error!`) ou de dépendances inutilisées dans `Cargo.toml`.
 
@@ -166,10 +166,10 @@ Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microserv
 
 Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
 
-1. **`builder`** (`rust:1-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
-2. **`node-deps`** (`node:20-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
-3. **Image finale** (`node:20-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
-4. **`CMD`** : `npx prisma migrate deploy && ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse).
+1. **`builder`** (`rust:1.88.0-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
+2. **`node-deps`** (`node:20.19.1-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:20.19.1-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
+4. **`CMD`** : `npx prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
 
 Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.
 

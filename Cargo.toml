@@ -2,7 +2,7 @@
 name = "chatvardage-auth"
 version = "0.2.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 
 # --- Dépendances -------------------------------------------------------
 # Chaque groupe est commenté pour expliquer POURQUOI la crate est là :
@@ -60,11 +60,7 @@ jsonwebtoken = "9"
 # d'environnement sont fournies directement par docker-compose).
 dotenvy = "0.15"
 
-# Middlewares HTTP génériques (CORS, logs des requêtes, timeout). `tower`
-# lui-même n'est jamais importé directement dans src/ (seulement via
-# tower-http/axum, qui l'embarquent déjà) : il n'est déclaré qu'en
-# dev-dependency ci-dessous, pour `tower::ServiceExt::oneshot` dans les
-# tests HTTP de bout en bout (voir interface/http/routes.rs).
+# Middlewares HTTP génériques (CORS, logs des requêtes, timeout).
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 
 # Journalisation structurée (remplace les println! de debug).
@@ -78,6 +74,10 @@ thiserror = "1"
 validator = { version = "0.18", features = ["derive"] }
 
 [dev-dependencies]
+# `tower` lui-même n'est jamais importé directement dans src/ (seulement
+# via tower-http/axum, qui l'embarquent déjà) : il est nécessaire ici pour
+# `tower::ServiceExt::oneshot` dans les tests HTTP de bout en bout (voir
+# interface/http/routes.rs).
 # `ServiceExt::oneshot` : envoie une requête HTTP directement au `Router`
 # axum dans les tests, sans ouvrir de vraie socket TCP (voir
 # interface/http/routes.rs).

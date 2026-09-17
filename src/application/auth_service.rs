@@ -11,8 +11,8 @@
 //! voir `infrastructure::fake_utilisateur_repository`).
 
 use std::sync::Arc;
-use std::sync::OnceLock;
 
+use tokio::sync::OnceCell;
 use uuid::Uuid;
 use validator::Validate;
 
@@ -43,7 +43,7 @@ impl AuthService {
         // valider d'abord (voir `validator` sur les DTO).
         requete.validate().map_err(AppError::Validation)?;
 
-        let hache = hacher_mot_de_passe(&requete.mot_de_passe)?;
+        let hache = hacher_mot_de_passe(&requete.mot_de_passe).await?;
         let courriel = normaliser_courriel(&requete.courriel);
 
         let utilisateur = self
@@ -91,9 +91,10 @@ impl AuthService {
         // message d'erreur générique ci-dessous.
         let hache_a_verifier = match &utilisateur {
             Some(u) => u.mot_de_passe_hache.clone(),
-            None => hachage_factice().to_string(),
+            None => hachage_factice().await?.to_string(),
         };
-        let mot_de_passe_valide = verifier_mot_de_passe(&requete.mot_de_passe, &hache_a_verifier);
+        let mot_de_passe_valide =
+            verifier_mot_de_passe(&requete.mot_de_passe, &hache_a_verifier).await?;
 
         // Message volontairement générique : on ne révèle jamais si
         // c'est l'identifiant ou le mot de passe qui est incorrect
@@ -153,18 +154,19 @@ impl AuthService {
                 .map_err(|e| AppError::Interne(e.to_string()))?
                 .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
 
-            if !verifier_mot_de_passe(mot_de_passe_actuel, &utilisateur_actuel.mot_de_passe_hache) {
+            if !verifier_mot_de_passe(mot_de_passe_actuel, &utilisateur_actuel.mot_de_passe_hache)
+                .await?
+            {
                 return Err(AppError::NonAutorise(
                     "mot de passe actuel incorrect".into(),
                 ));
             }
         }
 
-        let hache_mot_de_passe = requete
-            .mot_de_passe
-            .as_deref()
-            .map(hacher_mot_de_passe)
-            .transpose()?;
+        let hache_mot_de_passe = match requete.mot_de_passe.as_deref() {
+            Some(mot_de_passe) => Some(hacher_mot_de_passe(mot_de_passe).await?),
+            None => None,
+        };
         let courriel = requete.courriel.as_deref().map(normaliser_courriel);
 
         let utilisateur = self
@@ -201,7 +203,9 @@ impl AuthService {
         if !verifier_mot_de_passe(
             &requete.mot_de_passe_actuel,
             &utilisateur_actuel.mot_de_passe_hache,
-        ) {
+        )
+        .await?
+        {
             return Err(AppError::NonAutorise(
                 "mot de passe actuel incorrect".into(),
             ));
@@ -262,15 +266,17 @@ fn normaliser_courriel(courriel: &str) -> String {
 /// Hachage Argon2 valide mais rattaché à aucun compte réel, utilisé par
 /// `connecter` pour égaliser le temps de réponse entre un identifiant
 /// inconnu et un mot de passe incorrect (voir le commentaire dans
-/// `connecter`). Calculé une seule fois par processus (`OnceLock`) : le
+/// `connecter`). Calculé une seule fois par processus (`OnceCell`) : le
 /// recalculer à chaque tentative de connexion coûterait aussi cher qu'un
 /// vrai hachage, sans bénéfice supplémentaire.
-fn hachage_factice() -> &'static str {
-    static HACHAGE: OnceLock<String> = OnceLock::new();
-    HACHAGE.get_or_init(|| {
-        hacher_mot_de_passe("mot-de-passe-factice-jamais-utilise-pour-un-vrai-compte")
-            .expect("le hachage factice doit toujours réussir")
-    })
+async fn hachage_factice() -> Result<&'static str, AppError> {
+    static HACHAGE: OnceCell<String> = OnceCell::const_new();
+    HACHAGE
+        .get_or_try_init(|| async {
+            hacher_mot_de_passe("mot-de-passe-factice-jamais-utilise-pour-un-vrai-compte").await
+        })
+        .await
+        .map(String::as_str)
 }
 
 /// Traduit les erreurs de stockage (ex. pseudo/courriel déjà pris) en

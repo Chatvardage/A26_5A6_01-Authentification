@@ -479,6 +479,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inscription_rejette_un_pseudo_avec_des_caracteres_interdits() {
+        let ctx = nouveau_contexte();
+        // Liste blanche (alphanumérique + `_`/`-`) plutôt que liste noire :
+        // un pseudo est affiché tel quel dans le panneau d'administration
+        // de l'équipe — `<script>` doit être rejeté avant même d'atteindre
+        // la base de données.
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({
+                "pseudo": "<script>",
+                "courriel": "xss@example.com",
+                "mot_de_passe": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "pseudo: le pseudo ne peut contenir que des lettres, chiffres, '_' et '-'"
+        );
+
+        // Alphanumérique + `_`/`-` doit rester accepté.
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/register",
+            None,
+            Some(json!({
+                "pseudo": "alice_bob-42",
+                "courriel": "aliceb@example.com",
+                "mot_de_passe": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+    }
+
+    #[tokio::test]
     async fn inscription_rejette_un_corps_json_malforme() {
         let ctx = nouveau_contexte();
         // Champ `courriel` manquant : erreur de désérialisation Serde, pas

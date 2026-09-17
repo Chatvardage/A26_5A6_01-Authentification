@@ -200,6 +200,14 @@ npx prisma migrate dev --name <nom_de_la_migration>
 Ne jamais modifier une migration déjà appliquée pour masquer un
 changement — créer une nouvelle migration.
 
+Une migration (`index_courriel_insensible_a_la_casse`) remplace l'index
+`UNIQUE` standard sur `courriel` par un index fonctionnel sur
+`LOWER(courriel)` — défense en profondeur pour que PostgreSQL fasse
+respecter la même règle de casse que `trouver_par_identifiant` (voir
+AGENTS.md, section « Base de données et Prisma », pour le piège Prisma
+associé : cette contrainte n'est plus modélisable par la seule annotation
+`@unique` de `schema.prisma`).
+
 Dans Docker/déploiement, appliquer les migrations avec :
 
 ```bash
@@ -329,7 +337,7 @@ Résumé :
 |----------|------|
 | `DATABASE_URL` | Chaîne de connexion PostgreSQL — **toujours requise**, aucune valeur par défaut (lue à la fois par Prisma pour les migrations et par SQLx au runtime). Format : `postgresql://<user>:<mot_de_passe>@<hôte>:5432/<base>`. Ex. local : `postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth` ; dans le réseau Docker d'`infra` : `postgresql://auth_service:auth_service_dev@postgres:5432/chatvardage_auth`. Le suffixe `?schema=public` (convention Prisma) est **volontairement omis** : testé et accepté par SQLx, qui l'ignore avec un simple avertissement (`ignoring unrecognized connect parameter`) plutôt qu'une erreur — inutile de toute façon puisque `public` est déjà le schéma par défaut de PostgreSQL. |
 | `JWT_SECRET` | Secret de signature des JWT — **toujours requis, au moins 16 caractères** (le service refuse de démarrer sinon, y compris si la variable existe mais est vide — voir `config.rs`). **À changer avant la remise finale**, ne jamais committer un vrai secret. |
-| `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton (défaut : 24h) |
+| `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton en heures (défaut : 24h, doit être comprise entre 1 et 720 — 30 jours). Le rôle est encodé dans le jeton et jamais revérifié en base (voir « Limites connues ») : une durée élevée agrandit d'autant la fenêtre pendant laquelle un compte supprimé ou rétrogradé garde ses droits — la borne de 720h existe pour plafonner ce risque, pas seulement pour éviter un dépassement arithmétique. |
 | `PORT` | Port HTTP du service (défaut : 3001) |
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
 | `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente ou vide par défaut : CORS permissif (`Access-Control-Allow-Origin: *`), pratique en développement solo, mais ce service est censé rester interne (voir `AGENTS.md`) — l'infra d'équipe devrait fournir la vraie liste des origines en production. |
@@ -468,8 +476,13 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
 - Pas de renouvellement de jeton (refresh token) : un jeton expiré oblige
   à se reconnecter. Acceptable pour la portée du contrôle (24h de durée de
   vie par défaut).
-- Pas de limitation de débit (rate limiting) sur `/login` — à ajouter si le
-  temps le permet, pour limiter les tentatives de force brute.
+- Pas de limitation de débit (rate limiting) sur `/api/auth/login` **ni
+  sur `/api/auth/register`** — à ajouter si le temps le permet. Les deux
+  routes sont publiques (non authentifiées) et calculent systématiquement
+  un hachage Argon2 (délibérément coûteux en CPU) à chaque appel — y
+  compris `connecter` pour un identifiant inconnu, via le hachage factice
+  qui égalise le temps de réponse (voir plus bas) — donc un vecteur de
+  déni de service assez direct sans cette limitation.
 - Le tout premier compte admin doit être créé manuellement en base de
   données (voir [Créer un premier compte admin](#créer-un-premier-compte-admin)).
   Une commande CLI ou un script de "seed" (ex. variable d'environnement
@@ -483,8 +496,11 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
   /api/auth/me` échoue bien après suppression (404, voir tests), mais un
   rôle changé par un admin ne prend effet dans le jeton de la personne
   concernée qu'à sa prochaine connexion. Acceptable pour la portée du
-  contrôle (24h de durée de vie par défaut) ; une liste de révocation ou
-  des jetons de plus courte durée seraient la piste d'amélioration.
+  contrôle avec la durée de vie par défaut (24h) ; `JWT_DUREE_DE_VIE_HEURES`
+  est volontairement plafonnée à 720h (30 jours, voir `config.rs`) pour
+  qu'une configuration à durée élevée n'aggrave pas indéfiniment cette
+  fenêtre d'exploitation résiduelle. Une vraie liste de révocation ou des
+  jetons de plus courte durée seraient la piste d'amélioration.
 - **Énumération de comptes possible via `POST /api/auth/register`** :
   `connecter` investit un effort réel pour empêcher l'énumération à la
   connexion (hachage factice à temps constant, message générique — voir

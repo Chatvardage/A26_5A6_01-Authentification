@@ -284,6 +284,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creer_refuse_un_courriel_deja_pris_meme_a_la_casse_pres() {
+        // Contrairement au test ci-dessus (conflit de pseudo), on appelle
+        // ici le dépôt directement avec des casses différentes — sans
+        // passer par `AuthService::normaliser_courriel` — pour vérifier
+        // que c'est bien l'index PostgreSQL fonctionnel sur
+        // `LOWER(courriel)` (voir la migration
+        // `index_courriel_insensible_a_la_casse`) qui empêche le doublon,
+        // pas seulement la discipline applicative.
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("Carol");
+        let courriel = format!("{pseudo}@Example.com");
+        let cree = repo.creer(&pseudo, &courriel, "hash").await.unwrap();
+
+        let autre_pseudo = identifiant_unique("carol2");
+        let resultat = repo
+            .creer(&autre_pseudo, &courriel.to_lowercase(), "hash")
+            .await;
+        assert!(matches!(resultat, Err(RepoError::Conflit)));
+
+        repo.supprimer(cree.id).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn lister_contient_les_comptes_crees() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         let pseudo = identifiant_unique("carla");

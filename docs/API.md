@@ -119,7 +119,7 @@ inscription, pas besoin d'un second appel à `/login`).
 
 | Champ | Règle |
 |-------|-------|
-| pseudo | 3 à 20 caractères, ne peut pas contenir `@` (réservé aux courriels — sinon un pseudo comme `alice@x.co` pourrait être confondu avec un courriel à la connexion) |
+| pseudo | 3 à 20 caractères, uniquement lettres/chiffres ASCII, `_` et `-` (donc jamais `@`, ce qui évite au passage qu'un pseudo comme `alice@x.co` soit confondu avec un courriel à la connexion) |
 | courriel | format courriel valide, 254 caractères maximum (RFC 5321) ; normalisé en minuscules avant stockage |
 | mot_de_passe | 8 à 128 caractères |
 
@@ -217,7 +217,7 @@ permanente, bien après l'expiration normale du jeton.
 
 | Champ | Règle |
 |-------|-------|
-| pseudo | optionnel, 3 à 20 caractères si fourni, ne peut pas contenir `@` |
+| pseudo | optionnel, 3 à 20 caractères si fourni, uniquement lettres/chiffres ASCII, `_` et `-` |
 | courriel | optionnel, format courriel valide et 254 caractères maximum si fourni ; normalisé en minuscules |
 | mot_de_passe | optionnel, 8 à 128 caractères si fourni (rehaché avec Argon2) |
 | mot_de_passe_actuel | requis si `courriel` et/ou `mot_de_passe` sont fournis (ignoré sinon), 1 à 128 caractères |

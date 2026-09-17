@@ -72,6 +72,15 @@ COPY --from=node-deps /app/node_modules ./node_modules
 COPY package.json ./
 COPY prisma ./prisma
 
+# Ne pas tourner en root dans le conteneur final (principe du moindre
+# privilège) : `node:20-bookworm-slim` fournit déjà un utilisateur non
+# privilégié prêt à l'emploi (uid 1000), inutile d'en créer un autre.
+# `chown` après les `COPY` ci-dessus : `node` doit pouvoir lire/exécuter
+# le binaire et lire `node_modules/`/`prisma/` (aucune écriture requise
+# au runtime — pas de volume monté, PostgreSQL est externe).
+RUN chown -R node:node /app
+USER node
+
 EXPOSE 3001
 
 # Utilisé par docker-compose (condition "service_healthy") pour savoir

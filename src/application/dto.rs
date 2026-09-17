@@ -5,7 +5,7 @@
 //! base de données.
 
 use serde::{Deserialize, Serialize};
-use validator::Validate;
+use validator::{Validate, ValidationError};
 
 use crate::domain::utilisateur::{Role, UtilisateurPublic};
 
@@ -25,6 +25,25 @@ const LONGUEUR_MAX_COURRIEL: u64 = 254;
 /// généreux pour un usage légitime (bien au-delà d'une phrase de passe).
 const LONGUEUR_MAX_MOT_DE_PASSE: u64 = 128;
 
+/// Valide le jeu de caractères d'un pseudo : lettres/chiffres ASCII,
+/// `_` et `-` uniquement. Liste blanche plutôt que liste noire (ex. le
+/// `does_not_contain("@")` d'une version précédente, désormais rendu
+/// redondant par cette règle plus stricte) : un pseudo est affiché tel
+/// quel dans le panneau d'administration de l'équipe (AdminJS/Dashboard,
+/// voir AGENTS.md) — sans cette liste blanche, rien n'empêcherait des
+/// caractères de contrôle ou du HTML/JS (`<script>...`) d'y transiter, un
+/// vecteur de XSS stockée si ce panneau ne les échappe pas correctement.
+fn valider_pseudo(pseudo: &str) -> Result<(), ValidationError> {
+    let valide = pseudo
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if valide {
+        Ok(())
+    } else {
+        Err(ValidationError::new("pseudo_charset"))
+    }
+}
+
 #[derive(Debug, Deserialize, Validate)]
 pub struct InscriptionRequest {
     #[validate(
@@ -33,9 +52,9 @@ pub struct InscriptionRequest {
             max = 20,
             message = "le pseudo doit contenir entre 3 et 20 caractères"
         ),
-        does_not_contain(
-            pattern = "@",
-            message = "le pseudo ne peut pas contenir '@' (réservé aux courriels, pour éviter toute confusion à la connexion)"
+        custom(
+            function = "valider_pseudo",
+            message = "le pseudo ne peut contenir que des lettres, chiffres, '_' et '-'"
         )
     )]
     pub pseudo: String,
@@ -57,7 +76,10 @@ pub struct ConnexionRequest {
     /// Accepte un courriel OU un pseudo, comme demandé dans l'énoncé —
     /// plafonné à la même longueur que `courriel` (254, le plus grand des
     /// deux formats possibles) : sans borne, cette route non authentifiée
-    /// accepterait un identifiant arbitrairement volumineux.
+    /// accepterait un identifiant arbitrairement volumineux. Pas de
+    /// validation de charset ici (contrairement à `pseudo` à
+    /// l'inscription) : un courriel valide contient légitimement des
+    /// caractères qu'un pseudo n'a pas le droit d'avoir (`@`, `.`).
     #[validate(length(
         min = 1,
         max = "LONGUEUR_MAX_COURRIEL",
@@ -92,10 +114,9 @@ pub struct ChangerRoleRequest {
 /// `PATCH /api/auth/me` : modification de son propre compte. Tous les
 /// champs sont optionnels (au moins un requis, vérifié dans
 /// `AuthService::modifier_profil`, pas exprimable avec `validator` seul).
-/// Note : `validator` valide correctement `Option<String>` (un `None`
-/// est toujours considéré valide, seul un `Some` est vérifié) grâce aux
-/// implémentations `ValidateLength`/`ValidateEmail`/`ValidateContains`
-/// pour `Option<T>`.
+/// Note : `validator` valide correctement `Option<String>`, y compris
+/// pour un validateur `custom` comme `valider_pseudo` (`None` est
+/// toujours considéré valide, seul un `Some` est déballé puis vérifié).
 #[derive(Debug, Deserialize, Validate)]
 pub struct ModifierProfilRequest {
     #[validate(
@@ -104,9 +125,9 @@ pub struct ModifierProfilRequest {
             max = 20,
             message = "le pseudo doit contenir entre 3 et 20 caractères"
         ),
-        does_not_contain(
-            pattern = "@",
-            message = "le pseudo ne peut pas contenir '@' (réservé aux courriels, pour éviter toute confusion à la connexion)"
+        custom(
+            function = "valider_pseudo",
+            message = "le pseudo ne peut contenir que des lettres, chiffres, '_' et '-'"
         )
     )]
     pub pseudo: Option<String>,
@@ -150,9 +171,9 @@ pub struct ModifierUtilisateurRequest {
             max = 20,
             message = "le pseudo doit contenir entre 3 et 20 caractères"
         ),
-        does_not_contain(
-            pattern = "@",
-            message = "le pseudo ne peut pas contenir '@' (réservé aux courriels, pour éviter toute confusion à la connexion)"
+        custom(
+            function = "valider_pseudo",
+            message = "le pseudo ne peut contenir que des lettres, chiffres, '_' et '-'"
         )
     )]
     pub pseudo: Option<String>,

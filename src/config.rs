@@ -13,17 +13,27 @@
 /// empêche déjà le démarrage en échouant la connexion PostgreSQL).
 const LONGUEUR_MIN_JWT_SECRET: usize = 16;
 
-/// Bornes acceptées pour `JWT_DUREE_DE_VIE_HEURES`. `JwtService::generer_token`
-/// (`infrastructure/jwt.rs`) calcule l'expiration via
-/// `Duration::hours(n).checked_add_signed(...)`, protégé par un simple
-/// `.expect(...)` (pas une `AppError`) car cette valeur est censée être
-/// une constante de configuration validée au démarrage, pas une entrée
-/// utilisateur — sans ces bornes, une valeur aberrante dans `.env` (une
-/// faute de frappe avec trop de chiffres, par exemple) ferait paniquer
-/// `Duration::hours` à *chaque* tentative de connexion/inscription (pas
-/// seulement au démarrage) au lieu d'échouer une fois, clairement, ici.
+/// Bornes acceptées pour `JWT_DUREE_DE_VIE_HEURES`. Deux raisons distinctes :
+///
+/// 1. `JwtService::generer_token` (`infrastructure/jwt.rs`) calcule
+///    l'expiration via `Duration::hours(n).checked_add_signed(...)`,
+///    protégé par un simple `.expect(...)` (pas une `AppError`) car cette
+///    valeur est censée être une constante de configuration validée au
+///    démarrage, pas une entrée utilisateur — sans borne haute, une
+///    valeur aberrante dans `.env` (une faute de frappe avec trop de
+///    chiffres) ferait paniquer `Duration::hours` à *chaque* tentative de
+///    connexion/inscription (pas seulement au démarrage) au lieu
+///    d'échouer une fois, clairement, ici.
+/// 2. Le rôle (`role`) est encodé dans le jeton et jamais revérifié en
+///    base par le middleware — un admin rétrogradé ou un compte supprimé
+///    garde donc ses droits jusqu'à l'expiration du jeton, sans liste de
+///    révocation (voir README, section « Limites connues »). Une borne
+///    haute de 30 jours (plutôt qu'un an, techniquement acceptable pour
+///    la raison 1 seule) plafonne la durée de cette fenêtre d'exploitation
+///    résiduelle à une valeur qui reste raisonnable même si quelqu'un
+///    configure délibérément une longue durée de vie.
 const JWT_DUREE_MIN_HEURES: i64 = 1;
-const JWT_DUREE_MAX_HEURES: i64 = 8760; // 1 an
+const JWT_DUREE_MAX_HEURES: i64 = 720; // 30 jours
 
 pub struct Config {
     pub database_url: String,

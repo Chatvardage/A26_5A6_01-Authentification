@@ -25,6 +25,17 @@ model Utilisateur {
   // native de PostgreSQL depuis la version 13, aucune extension requise.
   id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   pseudo             String   @unique
+  // ⚠️ `@unique` déclare ici un index btree standard (sensible à la
+  // casse) — mais la migration `index_courriel_insensible_a_la_casse`
+  // (prisma/migrations/) l'a remplacé en base par un index UNIQUE
+  // fonctionnel sur LOWER(courriel), pour que l'unicité soit garantie
+  // par PostgreSQL indépendamment de la discipline applicative
+  // (AuthService normalise déjà en minuscules avant chaque écriture —
+  // voir pg_utilisateur_repository.rs). Prisma ne modélise pas les index
+  // fonctionnels/expression : cette annotation reste donc « fausse » au
+  // sens strict (documentation seulement) — ne pas relancer `prisma
+  // migrate dev` sur ce modèle sans relire attentivement le SQL généré,
+  // qui pourrait proposer de revenir à un index standard sur `courriel`.
   courriel           String   @unique
   mot_de_passe_hache String
   role               String   @default("utilisateur")

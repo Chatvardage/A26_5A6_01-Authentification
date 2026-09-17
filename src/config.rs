@@ -25,14 +25,6 @@ const LONGUEUR_MIN_JWT_SECRET: usize = 32;
 ///    chiffres) ferait paniquer `Duration::hours` à *chaque* tentative de
 ///    connexion/inscription (pas seulement au démarrage) au lieu
 ///    d'échouer une fois, clairement, ici.
-/// 2. Le rôle (`role`) est encodé dans le jeton et jamais revérifié en
-///    base par le middleware — un admin rétrogradé ou un compte supprimé
-///    garde donc ses droits jusqu'à l'expiration du jeton, sans liste de
-///    révocation (voir README, section « Limites connues »). Une borne
-///    haute de 30 jours (plutôt qu'un an, techniquement acceptable pour
-///    la raison 1 seule) plafonne la durée de cette fenêtre d'exploitation
-///    résiduelle à une valeur qui reste raisonnable même si quelqu'un
-///    configure délibérément une longue durée de vie.
 const JWT_DUREE_MIN_HEURES: i64 = 1;
 const JWT_DUREE_MAX_HEURES: i64 = 720; // 30 jours
 
@@ -42,11 +34,8 @@ pub struct Config {
     pub jwt_duree_de_vie_heures: i64,
     pub port: u16,
     /// Liste blanche CORS (voir `interface::http::routes::construire`).
-    /// `None` = pas de restriction (`Access-Control-Allow-Origin: *`) —
-    /// c'est la valeur par défaut, pratique en développement solo, mais
-    /// ce service est censé rester interne (voir AGENTS.md) : `infra`
-    /// devrait fournir la vraie liste des origines via
-    /// `CORS_ALLOWED_ORIGINS` en production.
+    /// `None` ou une liste vide n'autorise aucune origine : l'infrastructure
+    /// doit fournir `CORS_ALLOWED_ORIGINS` explicitement.
     pub cors_allowed_origins: Option<Vec<String>>,
 }
 

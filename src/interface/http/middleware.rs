@@ -49,10 +49,20 @@ impl FromRequestParts<AppState> for UtilisateurAuthentifie {
         let id_utilisateur = uuid::Uuid::parse_str(&claims.sub)
             .map_err(|_| AppError::NonAutorise("jeton invalide".into()))?;
 
+        let utilisateur = state
+            .depot_utilisateurs
+            .trouver_par_id(id_utilisateur)
+            .await
+            .map_err(|e| AppError::Interne(e.to_string()))?
+            .ok_or_else(|| {
+                AppError::NonAutorise("jeton révoqué ou utilisateur introuvable".into())
+            })?;
+        let role = utilisateur.role();
+
         Ok(UtilisateurAuthentifie {
             id_utilisateur,
-            pseudo: claims.pseudo,
-            role: claims.role,
+            pseudo: utilisateur.pseudo,
+            role,
         })
     }
 }

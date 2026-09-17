@@ -48,7 +48,14 @@ impl Role {
         match value {
             "admin" => Role::Admin,
             "moderateur" => Role::Moderateur,
-            _ => Role::Utilisateur,
+            "utilisateur" => Role::Utilisateur,
+            valeur_inconnue => {
+                tracing::warn!(
+                    role = valeur_inconnue,
+                    "rôle inconnu en base, repli vers le rôle utilisateur"
+                );
+                Role::Utilisateur
+            }
         }
     }
 }

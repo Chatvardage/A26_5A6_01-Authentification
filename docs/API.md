@@ -184,9 +184,8 @@ redemander le mot de passe.
 }
 ```
 
-**Erreurs** : `401` (jeton manquant, invalide ou expiré), `404` (le
-compte du jeton n'existe plus — voir note sur `DELETE /api/auth/me`
-ci-dessous).
+**Erreurs** : `401` (jeton manquant, invalide, expiré, ou associé à un
+compte supprimé).
 
 ---
 
@@ -224,7 +223,7 @@ permanente, bien après l'expiration normale du jeton.
 
 **Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
 
-**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant/invalide, ou `mot_de_passe_actuel` incorrect), `404` (compte déjà supprimé), `409` (pseudo ou courriel déjà pris par un autre compte).
+**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant, invalide, expiré, associé à un compte supprimé, ou `mot_de_passe_actuel` incorrect), `409` (pseudo ou courriel déjà pris par un autre compte).
 
 ---
 
@@ -237,10 +236,8 @@ compte de quelqu'un d'autre).
 
 **Réponse `204`** (pas de corps) si supprimé.
 
-**Erreurs** : `401` (jeton manquant/invalide), `404` (compte déjà
-supprimé — le jeton reste cryptographiquement valide jusqu'à son
-expiration même après suppression du compte, voir README section
-« Limites connues »).
+**Erreurs** : `401` (jeton manquant, invalide, expiré, ou associé à un
+compte déjà supprimé).
 
 ---
 
@@ -326,10 +323,12 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
 ## Notes d'implémentation (pour le README / la démonstration)
 
 - Mots de passe hachés avec Argon2 (jamais stockés en clair).
-- Sessions sans état : un JWT signé (HMAC) contenant `sub` (id utilisateur —
-  nom imposé par la norme JWT, non traduit), `pseudo`, `role` et `exp`
-  (expiration — aussi imposé par la norme JWT, 24h par défaut, configurable
-  via `JWT_DUREE_DE_VIE_HEURES`).
+- Chaque requête protégée présente un JWT signé (HMAC) contenant `sub`
+  (id utilisateur — nom imposé par la norme JWT, non traduit), `pseudo`,
+  `role` et `exp` (expiration — aussi imposé par la norme JWT, 24h par
+  défaut, configurable via `JWT_DUREE_DE_VIE_HEURES`). Après validation
+  cryptographique, le middleware relit l'utilisateur en base : une
+  suppression ou un changement de rôle est appliqué immédiatement.
 - `identifiant` de connexion accepte courriel OU pseudo, comme demandé dans
   l'énoncé.
 - Le courriel est normalisé en minuscules avant d'être stocké

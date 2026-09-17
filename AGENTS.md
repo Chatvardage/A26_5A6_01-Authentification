@@ -51,7 +51,7 @@ Ne pas déplacer ici les responsabilités des autres microservices.
 
 Le service expose une API REST JSON sous `/api/auth` (inscription, connexion, profil) et `/api/users` (administration) — voir [docs/API.md](docs/API.md) pour le détail des routes, requêtes et réponses ; c'est la seule référence à jour du contrat réellement implémenté. Les routes protégées attendent un jeton JWT dans l'en-tête `Authorization: Bearer <jeton>` (voir `interface/http/middleware.rs`), jamais des en-têtes `x-*` personnalisés ni un préfixe `/http/routes` — une version antérieure de ce fichier décrivait un contrat par en-têtes qui n'a jamais été implémenté (probablement copié d'un autre service de l'équipe) ; ne pas s'y fier.
 
-Le service est destiné à être appelé derrière `Serveur-API` (le Gateway de l'équipe), qui doit relayer les mêmes routes/corps JSON tels quels plutôt que traduire vers un contrat différent. Dans l'architecture finale, l'authentification doit rester un service interne, jamais exposé directement à Internet.
+Le service est destiné à être appelé derrière `Serveur-API` (le Gateway de l'équipe), qui doit relayer les mêmes routes/corps JSON tels quels plutôt que traduire vers un contrat différent. Le Gateway doit aussi appliquer la limitation de débit sur `/api/auth/login` et `/api/auth/register` avant que ces routes publiques ne lancent un calcul Argon2. Dans l'architecture finale, l'authentification doit rester un service interne, jamais exposé directement à Internet.
 
 ## Base de données et Prisma
 
@@ -204,6 +204,7 @@ auth-service:
     JWT_SECRET: ${JWT_SECRET}
     JWT_DUREE_DE_VIE_HEURES: 24
     PORT: 3001
+    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
   depends_on:
     postgres:
       condition: service_healthy

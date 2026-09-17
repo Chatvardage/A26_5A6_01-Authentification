@@ -25,12 +25,10 @@ use super::{auth_controller, utilisateurs_controller};
 /// inutilement le serveur (désérialisation, puis rejet par `validator`).
 const LIMITE_CORPS_REQUETE_OCTETS: usize = 16 * 1024;
 
-/// `origines_autorisees` : liste blanche CORS (`None` ou liste vide =
-/// permissif, `Access-Control-Allow-Origin: *` — pratique en développement
-/// solo, mais ce service est censé rester interne, voir AGENTS.md). En
-/// pratique, l'infra d'équipe passera la liste des origines réellement
-/// utilisées (app desktop Electron, panneau d'administration web) via
-/// `CORS_ALLOWED_ORIGINS` (voir `config.rs`).
+/// `origines_autorisees` : liste blanche CORS. Une variable absente, vide
+/// ou invalide ne permet aucune origine : l'infrastructure doit fournir
+/// explicitement les origines de l'application Electron et du panneau
+/// d'administration via `CORS_ALLOWED_ORIGINS` (voir `config.rs`).
 pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Router {
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
@@ -52,29 +50,18 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         )
         .route("/:id/role", patch(utilisateurs_controller::changer_role));
 
-    // Permissif par défaut (dev solo, voir doc de `construire` ci-dessus) —
-    // mais jamais *silencieusement* permissif quand `CORS_ALLOWED_ORIGINS`
-    // était censée restreindre l'accès : une infra qui pense avoir
-    // configuré une liste blanche mérite de savoir, dans ses logs, que ce
-    // n'est en réalité pas le cas (variable vide après nettoyage, ex.
-    // `CORS_ALLOWED_ORIGINS=,,,`, ou aucune origine survivant au parsing).
-    // Cohérent avec `config::lire_var_numerique`, qui journalise de la
-    // même façon une variable d'environnement mal formée.
-    let cors_permissif = || {
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods(Any)
-            .allow_headers(Any)
-    };
+    let cors_restreint = || CorsLayer::new().allow_methods(Any).allow_headers(Any);
     let cors = match origines_autorisees {
-        None => cors_permissif(),
+        None => {
+            tracing::warn!("CORS_ALLOWED_ORIGINS est absente — aucune origine n'est autorisée");
+            cors_restreint()
+        }
         Some([]) => {
             tracing::warn!(
                 "CORS_ALLOWED_ORIGINS est définie mais ne contient aucune origine (ex. \
-                 \"CORS_ALLOWED_ORIGINS=,,,\") — CORS reste permissif (Access-Control-Allow-Origin: *), \
-                 probablement pas l'intention"
+                 \"CORS_ALLOWED_ORIGINS=,,,\") — aucune origine n'est autorisée"
             );
-            cors_permissif()
+            cors_restreint()
         }
         Some(origines) => {
             // Une origine qui ne parse pas est écartée (pas de panique
@@ -95,10 +82,10 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
                 .collect();
             if valeurs.is_empty() {
                 tracing::warn!(
-                    "CORS_ALLOWED_ORIGINS: aucune origine valide après filtrage — CORS reste \
-                     permissif (Access-Control-Allow-Origin: *), probablement pas l'intention"
+                    "CORS_ALLOWED_ORIGINS: aucune origine valide après filtrage — aucune \
+                     origine n'est autorisée"
                 );
-                cors_permissif()
+                cors_restreint()
             } else {
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::list(valeurs))
@@ -441,9 +428,8 @@ mod tests {
     }
 
     /// Retourne `true` si une réponse à `GET /health` avec l'en-tête
-    /// `Origin` donné porte `Access-Control-Allow-Origin: *` (CORS
-    /// permissif).
-    async fn cors_est_permissif(app: Router, origine_testee: &str) -> bool {
+    /// `Origin` donné ne porte pas `Access-Control-Allow-Origin`.
+    async fn cors_est_refuse(app: Router, origine_testee: &str) -> bool {
         let reponse = app
             .oneshot(
                 Request::builder()
@@ -454,29 +440,35 @@ mod tests {
             )
             .await
             .unwrap();
-        reponse.headers().get("access-control-allow-origin") == Some(&"*".parse().unwrap())
+        reponse
+            .headers()
+            .get("access-control-allow-origin")
+            .is_none()
     }
 
     #[tokio::test]
-    async fn cors_retombe_en_mode_permissif_si_la_liste_est_vide_apres_nettoyage() {
+    async fn cors_refuse_toute_origine_si_la_variable_est_absente() {
+        let ctx = nouveau_contexte();
+        assert!(cors_est_refuse(ctx.app, "http://nimporte-quoi.test").await);
+    }
+
+    #[tokio::test]
+    async fn cors_refuse_toute_origine_si_la_liste_est_vide_apres_nettoyage() {
         // Simule `CORS_ALLOWED_ORIGINS=,,,` : `config.rs` filtre déjà les
         // entrées vides, donnant `Some(vec![])` — distinct de `None`
-        // (variable absente). Les deux doivent retomber sur le mode
-        // permissif, mais celui-ci doit journaliser un avertissement (non
-        // vérifiable directement ici sans abonné `tracing` de capture,
-        // voir le commentaire dans `construire`).
+        // (variable absente). Les deux doivent refuser toute origine.
         let app = app_avec_origines(&[]);
-        assert!(cors_est_permissif(app, "http://nimporte-quoi.test").await);
+        assert!(cors_est_refuse(app, "http://nimporte-quoi.test").await);
     }
 
     #[tokio::test]
-    async fn cors_retombe_en_mode_permissif_si_toutes_les_origines_sont_invalides() {
+    async fn cors_refuse_toute_origine_si_toutes_les_origines_sont_invalides() {
         let origines = vec![
             "origine\ninvalide".to_string(),
             "encore\ninvalide".to_string(),
         ];
         let app = app_avec_origines(&origines);
-        assert!(cors_est_permissif(app, "http://nimporte-quoi.test").await);
+        assert!(cors_est_refuse(app, "http://nimporte-quoi.test").await);
     }
 
     #[tokio::test]
@@ -825,7 +817,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn me_apres_suppression_du_compte_est_introuvable() {
+    async fn me_apres_suppression_du_compte_est_non_autorise() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
@@ -836,7 +828,7 @@ mod tests {
         // — voir limites connues du README) : c'est la recherche en base
         // qui doit maintenant échouer.
         let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
-        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -968,7 +960,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modifier_moi_courriel_apres_suppression_est_introuvable() {
+    async fn modifier_moi_courriel_apres_suppression_est_non_autorise() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
         requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
@@ -988,7 +980,7 @@ mod tests {
             })),
         )
         .await;
-        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1074,7 +1066,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn modifier_moi_apres_suppression_est_introuvable() {
+    async fn modifier_moi_apres_suppression_est_non_autorise() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
         requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
@@ -1087,7 +1079,7 @@ mod tests {
             Some(json!({ "pseudo": "alice2" })),
         )
         .await;
-        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1098,7 +1090,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn supprimer_moi_deux_fois_echoue_la_seconde_fois() {
+    async fn supprimer_moi_deux_fois_refuse_la_seconde_fois() {
         let ctx = nouveau_contexte();
         let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
@@ -1106,7 +1098,7 @@ mod tests {
         assert_eq!(statut, StatusCode::NO_CONTENT);
 
         let (statut, _) = requete(&ctx.app, "DELETE", "/api/auth/me", Some(&jeton), None).await;
-        assert_eq!(statut, StatusCode::NOT_FOUND);
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1173,6 +1165,23 @@ mod tests {
         let ctx = nouveau_contexte();
         let (statut, _) = requete(&ctx.app, "GET", "/api/users", None, None).await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn admin_retrograde_perd_immediatement_lacces_avec_son_ancien_jeton() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        ctx.depot_concret
+            .changer_role(id_admin, Role::Utilisateur)
+            .await
+            .unwrap();
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]

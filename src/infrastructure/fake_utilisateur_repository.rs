@@ -171,6 +171,12 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         if !utilisateurs.contains_key(&id) {
             return Ok(None);
         }
+        if utilisateurs
+            .get(&id)
+            .is_some_and(|u| u.mot_de_passe_hache != mot_de_passe_hache_actuel)
+        {
+            return Ok(None);
+        }
         let deja_pris = utilisateurs.values().any(|u| {
             u.id != id
                 && ((pseudo.is_some() && Some(u.pseudo.as_str()) == pseudo)
@@ -180,21 +186,19 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             return Err(RepoError::Conflit);
         }
 
-        Ok(utilisateurs.get_mut(&id).and_then(|u| {
-            (u.mot_de_passe_hache == mot_de_passe_hache_actuel).then(|| {
-                if let Some(pseudo) = pseudo {
-                    u.pseudo = pseudo.to_string();
-                }
-                if let Some(courriel) = courriel {
-                    u.courriel = courriel.to_string();
-                }
-                if let Some(hache) = mot_de_passe_hache {
-                    u.mot_de_passe_hache = hache.to_string();
-                    u.version_auth += 1;
-                }
-                u.modifie_le = Utc::now();
-                u.clone()
-            })
+        Ok(utilisateurs.get_mut(&id).map(|u| {
+            if let Some(pseudo) = pseudo {
+                u.pseudo = pseudo.to_string();
+            }
+            if let Some(courriel) = courriel {
+                u.courriel = courriel.to_string();
+            }
+            if let Some(hache) = mot_de_passe_hache {
+                u.mot_de_passe_hache = hache.to_string();
+                u.version_auth += 1;
+            }
+            u.modifie_le = Utc::now();
+            u.clone()
         }))
     }
 

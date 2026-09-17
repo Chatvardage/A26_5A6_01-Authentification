@@ -49,7 +49,11 @@ RUN npm ci
 # suit la même séquence de build que les autres microservices Node de
 # l'équipe (voir AGENTS.md, section Docker).
 COPY prisma ./prisma
-RUN npx prisma generate
+# Prisma valide la datasource durant `generate`. Cette URL factice n'est
+# utilisée qu'au build et ne contient aucun secret; l'URL réelle est fournie
+# au démarrage par l'environnement du conteneur.
+RUN DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder \
+    npx prisma generate
 
 # --- Étape 3 : image finale ----------------------------------------------
 # Basée sur Node.js (pas une image Debian minimale) : le conteneur doit

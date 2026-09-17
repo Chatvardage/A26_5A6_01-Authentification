@@ -1278,6 +1278,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn routes_admin_refusent_un_non_admin_avant_lextraction_du_corps_ou_du_path() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let reponse = ctx
+            .app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("PATCH")
+                    .uri("/api/users/pas-un-uuid/role")
+                    .header("Authorization", format!("Bearer {jeton}"))
+                    .header("content-type", "application/json")
+                    .body(Body::from("pas-du-json"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(reponse.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn routes_admin_refusees_sans_jeton() {
         let ctx = nouveau_contexte();
         let (statut, _) = requete(&ctx.app, "GET", "/api/users", None, None).await;

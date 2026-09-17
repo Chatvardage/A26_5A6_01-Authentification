@@ -45,10 +45,9 @@ pub enum AppError {
     /// (`interface::http::extracteurs`) : reformate une
     /// `JsonRejection`/`PathRejection` d'axum vers l'enveloppe
     /// `{ "erreur": ... }` attendue, tout en conservant le code de statut
-    /// que l'extracteur nu aurait renvoyé (400 pour un JSON malformé,
-    /// mais 413 pour un corps trop volumineux, 415 pour un
-    /// `Content-Type` incorrect, etc.) — contrairement à `Requete`, ce
-    /// n'est jamais nécessairement un 400.
+    /// que l'extracteur nu aurait renvoyé. Les erreurs de JSON sont
+    /// normalisées à 400, sauf un corps trop volumineux qui reste 413;
+    /// contrairement à `Requete`, ce n'est donc pas nécessairement un 400.
     #[error("erreur d'extraction ({0}): {1}")]
     Extraction(StatusCode, String),
 

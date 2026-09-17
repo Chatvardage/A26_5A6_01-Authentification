@@ -22,6 +22,11 @@ pub struct UtilisateurAuthentifie {
     pub utilisateur: UtilisateurPublic,
 }
 
+/// Extracteur réservé aux routes d'administration. La vérification du rôle
+/// intervient pendant l'extraction des parties de requête, avant `Path` et
+/// surtout avant tout extracteur du corps comme `Json`.
+pub struct AdministrateurAuthentifie(pub UtilisateurAuthentifie);
+
 // Dans axum 0.7, le trait `FromRequestParts` est lui-même défini avec la
 // macro `#[async_trait]` (pas encore l'"async fn in trait" natif de Rust,
 // qui n'arrivera dans axum qu'à partir de la version 0.8). Le compilateur
@@ -70,6 +75,20 @@ impl FromRequestParts<AppState> for UtilisateurAuthentifie {
             role,
             utilisateur,
         })
+    }
+}
+
+#[async_trait]
+impl FromRequestParts<AppState> for AdministrateurAuthentifie {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let utilisateur = UtilisateurAuthentifie::from_request_parts(parts, state).await?;
+        exiger_admin(utilisateur.role)?;
+        Ok(Self(utilisateur))
     }
 }
 

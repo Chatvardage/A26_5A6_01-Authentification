@@ -12,15 +12,13 @@ use crate::error::AppError;
 use crate::state::AppState;
 
 use super::extracteurs::{Json, Path};
-use super::middleware::{exiger_admin, UtilisateurAuthentifie};
+use super::middleware::AdministrateurAuthentifie;
 
 /// GET /api/users — liste tous les comptes (admin uniquement).
 pub async fn lister(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(_session): AdministrateurAuthentifie,
 ) -> Result<ReponseJson<Vec<UtilisateurPublic>>, AppError> {
-    exiger_admin(session.role)?;
-
     let utilisateurs = state
         .depot_utilisateurs
         .lister()
@@ -38,11 +36,9 @@ pub async fn lister(
 /// POST /api/users — crée un compte standard (admin uniquement).
 pub async fn creer(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
     Json(requete): Json<InscriptionRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    exiger_admin(session.role)?;
-
     let utilisateur = state.auth_service.creer_utilisateur(requete).await?;
     tracing::info!(
         admin = %session.pseudo,
@@ -55,11 +51,9 @@ pub async fn creer(
 /// GET /api/users/:id — retourne un compte précis (admin uniquement).
 pub async fn obtenir(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(_session): AdministrateurAuthentifie,
     Path(id): Path<Uuid>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    exiger_admin(session.role)?;
-
     let utilisateur = state
         .depot_utilisateurs
         .trouver_par_id(id)
@@ -74,11 +68,10 @@ pub async fn obtenir(
 /// (admin uniquement, sans toucher au mot de passe ni au rôle).
 pub async fn modifier(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
     Path(id): Path<Uuid>,
     Json(requete): Json<ModifierUtilisateurRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    exiger_admin(session.role)?;
     exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
 
     let utilisateur = state.auth_service.modifier_utilisateur(id, requete).await?;
@@ -89,10 +82,9 @@ pub async fn modifier(
 /// DELETE /api/users/:id — supprime un compte (admin uniquement).
 pub async fn supprimer(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
-    exiger_admin(session.role)?;
     exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
 
     let supprime = state
@@ -113,12 +105,10 @@ pub async fn supprimer(
 /// uniquement). Permet de promouvoir un utilisateur en modérateur/admin.
 pub async fn changer_role(
     State(state): State<AppState>,
-    session: UtilisateurAuthentifie,
+    AdministrateurAuthentifie(session): AdministrateurAuthentifie,
     Path(id): Path<Uuid>,
     Json(requete): Json<ChangerRoleRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
-    exiger_admin(session.role)?;
-
     let utilisateur = state
         .depot_utilisateurs
         .changer_role(id, requete.role)

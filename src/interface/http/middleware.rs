@@ -57,6 +57,9 @@ impl FromRequestParts<AppState> for UtilisateurAuthentifie {
             .ok_or_else(|| {
                 AppError::NonAutorise("jeton révoqué ou utilisateur introuvable".into())
             })?;
+        if claims.version_auth != utilisateur.version_auth {
+            return Err(AppError::NonAutorise("jeton révoqué".into()));
+        }
         let role = utilisateur.role();
 
         Ok(UtilisateurAuthentifie {

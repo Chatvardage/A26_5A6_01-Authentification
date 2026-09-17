@@ -297,7 +297,9 @@ caractères maximum (normalisé en minuscules).
 
 **Réponse `200`** : l'objet utilisateur mis à jour.
 
-**Erreurs** : `400` (validation, ou aucun champ fourni), `404` (id introuvable), `409` (pseudo ou courriel déjà pris).
+**Erreurs** : `400` (validation, ou aucun champ fourni), `403` (un admin
+doit utiliser `PATCH /api/auth/me` pour modifier son propre compte), `404`
+(id introuvable), `409` (pseudo ou courriel déjà pris).
 
 ---
 
@@ -307,7 +309,12 @@ Supprime le compte de quelqu'un d'autre.
 
 **Réponse `204`** (pas de corps) si supprimé.
 
-**Erreurs** : `404` si l'id n'existe pas.
+Un admin doit utiliser `DELETE /api/auth/me` pour supprimer son propre
+compte, afin de fournir la reconfirmation du mot de passe exigée par cette
+route.
+
+**Erreurs** : `403` si l'id est celui de l'admin connecté, `404` si l'id
+n'existe pas.
 
 ---
 
@@ -336,10 +343,11 @@ Valeurs possibles : `admin`, `moderateur`, `utilisateur`.
 - Mots de passe hachés avec Argon2 (jamais stockés en clair).
 - Chaque requête protégée présente un JWT signé (HMAC) contenant `sub`
   (id utilisateur — nom imposé par la norme JWT, non traduit), `pseudo`,
-  `role` et `exp` (expiration — aussi imposé par la norme JWT, 24h par
-  défaut, configurable via `JWT_DUREE_DE_VIE_HEURES`). Après validation
-  cryptographique, le middleware relit l'utilisateur en base : une
-  suppression ou un changement de rôle est appliqué immédiatement.
+  `role`, `version_auth` et `exp` (expiration — aussi imposé par la norme
+  JWT, 24h par défaut, configurable via `JWT_DUREE_DE_VIE_HEURES`). Après
+  validation cryptographique, le middleware relit l'utilisateur en base :
+  une suppression, un changement de rôle ou un changement de mot de passe
+  est appliqué immédiatement.
 - `identifiant` de connexion accepte courriel OU pseudo, comme demandé dans
   l'énoncé.
 - Le courriel est normalisé en minuscules avant d'être stocké

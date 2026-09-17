@@ -38,6 +38,7 @@ model Utilisateur {
   // qui pourrait proposer de revenir à un index standard sur `courriel`.
   courriel           String   @unique
   mot_de_passe_hache String
+  version_auth       Int      @default(0)
   role               String   @default("utilisateur")
   // `@db.Timestamptz` (avec fuseau) sur les deux colonnes : le code Rust
   // lit ces colonnes dans `chrono::DateTime<Utc>` (voir

@@ -38,7 +38,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             r#"
             INSERT INTO utilisateurs (pseudo, courriel, mot_de_passe_hache)
             VALUES ($1, $2, $3)
-            RETURNING id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le
+            RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,
         )
         .bind(pseudo)
@@ -51,7 +51,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
 
     async fn trouver_par_id(&self, id: Uuid) -> Result<Option<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
-            "SELECT id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le \
+            "SELECT id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le \
              FROM utilisateurs WHERE id = $1",
         )
         .bind(id)
@@ -70,7 +70,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         // sensible à la casse (comparaison exacte), volontairement : rien
         // dans l'énoncé n'exige l'insensibilité à la casse pour un pseudo.
         sqlx::query_as::<_, Utilisateur>(
-            "SELECT id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le \
+            "SELECT id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le \
              FROM utilisateurs WHERE LOWER(courriel) = LOWER($1) OR pseudo = $1",
         )
         .bind(identifiant)
@@ -81,7 +81,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
 
     async fn lister(&self) -> Result<Vec<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
-            "SELECT id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le \
+            "SELECT id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le \
              FROM utilisateurs ORDER BY cree_le DESC",
         )
         .fetch_all(&self.pool)
@@ -102,9 +102,10 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             SET pseudo = COALESCE($2, pseudo),
                 courriel = COALESCE($3, courriel),
                 mot_de_passe_hache = COALESCE($4, mot_de_passe_hache),
-                modifie_le = now()
+            version_auth = version_auth + CASE WHEN $4 IS NULL THEN 0 ELSE 1 END,
+            modifie_le = now()
             WHERE id = $1
-            RETURNING id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le
+            RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,
         )
         .bind(id)
@@ -130,7 +131,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             r#"
             UPDATE utilisateurs SET role = $2, modifie_le = now()
             WHERE id = $1
-            RETURNING id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le
+            RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,
         )
         .bind(id)

@@ -73,6 +73,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             pseudo: pseudo.to_string(),
             courriel: courriel.to_string(),
             mot_de_passe_hache: mot_de_passe_hache.to_string(),
+            version_auth: 0,
             role: Role::Utilisateur.as_str().to_string(),
             cree_le: maintenant,
             modifie_le: maintenant,
@@ -141,6 +142,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             }
             if let Some(hache) = mot_de_passe_hache {
                 u.mot_de_passe_hache = hache.to_string();
+                u.version_auth += 1;
             }
             u.modifie_le = Utc::now();
             u.clone()

@@ -77,6 +77,9 @@ pub struct Utilisateur {
     /// Jamais exposé dans une réponse HTTP : voir `UtilisateurPublic`
     /// plus bas, qui est le type réellement renvoyé au frontend.
     pub mot_de_passe_hache: String,
+    /// Version incrémentée lors d'un changement de mot de passe afin
+    /// d'invalider les JWT précédemment émis.
+    pub version_auth: i32,
     pub role: String,
     pub cree_le: chrono::DateTime<chrono::Utc>,
     pub modifie_le: chrono::DateTime<chrono::Utc>,
@@ -147,6 +150,7 @@ mod tests {
             pseudo: "alice".into(),
             courriel: "alice@example.com".into(),
             mot_de_passe_hache: "hash-secret".into(),
+            version_auth: 0,
             role: "admin".into(),
             cree_le: maintenant,
             modifie_le: maintenant,

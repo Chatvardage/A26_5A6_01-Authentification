@@ -150,6 +150,7 @@ model Utilisateur {
   pseudo             String   @unique
   courriel           String   @unique
   mot_de_passe_hache String
+  version_auth       Int      @default(0)
   role               String   @default("utilisateur")
   cree_le            DateTime @default(now()) @db.Timestamptz
   modifie_le         DateTime @default(now()) @db.Timestamptz
@@ -181,6 +182,7 @@ les commentaires dans `prisma/schema.prisma` pour le détail) :
 | `pseudo` | texte | unique, non nul |
 | `courriel` | texte | unique, non nul |
 | `mot_de_passe_hache` | texte | non nul (hash Argon2, jamais le mot de passe en clair) |
+| `version_auth` | entier | non nul, incrémenté à chaque changement de mot de passe pour révoquer les JWT antérieurs |
 | `role` | texte | non nul, valeurs attendues : `admin`, `moderateur`, `utilisateur` (défaut : `utilisateur`) |
 | `cree_le` | horodatage avec fuseau | non nul |
 | `modifie_le` | horodatage avec fuseau | non nul |
@@ -260,6 +262,11 @@ cd A26_5A6_01-Authentification
 cp .env.example .env
 docker compose up --build
 ```
+
+Pour appeler l'API depuis un navigateur, renseigner
+`CORS_ALLOWED_ORIGINS` dans `.env` avant le démarrage (par exemple
+`CORS_ALLOWED_ORIGINS=http://localhost:5173`). Sans cette liste blanche,
+le service refuse les requêtes cross-origin.
 
 Ce `docker-compose.yml` sert à développer/tester **ce service seul**, avec
 sa propre base PostgreSQL de développement. Il démarre le conteneur
@@ -476,10 +483,6 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
 - Pas de renouvellement de jeton (refresh token) : un jeton expiré oblige
   à se reconnecter. Acceptable pour la portée du contrôle (24h de durée de
   vie par défaut).
-- Un changement de mot de passe ne révoque pas les JWT déjà émis : leur
-  signature reste valide jusqu'à leur expiration, tant que le compte existe.
-  Le middleware relit néanmoins le rôle courant en base, donc un changement
-  de rôle ou une suppression de compte prend effet immédiatement.
 - La limitation de débit de `/api/auth/login` et `/api/auth/register`
   relève du `Serveur-API` : le Gateway, point d'entrée unique, doit
   limiter ces routes publiques avant qu'elles ne déclenchent un hachage

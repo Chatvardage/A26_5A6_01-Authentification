@@ -28,6 +28,7 @@ pub struct Claims {
     pub sub: String,
     pub pseudo: String,
     pub role: Role,
+    pub version_auth: i32,
     pub exp: usize,
 }
 
@@ -49,6 +50,7 @@ impl JwtService {
         id_utilisateur: Uuid,
         pseudo: &str,
         role: Role,
+        version_auth: i32,
     ) -> Result<String, AppError> {
         let expiration = Utc::now()
             .checked_add_signed(Duration::hours(self.duree_de_vie_heures))
@@ -59,6 +61,7 @@ impl JwtService {
             sub: id_utilisateur.to_string(),
             pseudo: pseudo.to_string(),
             role,
+            version_auth,
             exp: expiration,
         };
 
@@ -91,13 +94,14 @@ mod tests {
         let id = Uuid::new_v4();
 
         let jeton = service
-            .generer_token(id, "alice", Role::Utilisateur)
+            .generer_token(id, "alice", Role::Utilisateur, 0)
             .unwrap();
         let claims = service.valider_token(&jeton).unwrap();
 
         assert_eq!(claims.sub, id.to_string());
         assert_eq!(claims.pseudo, "alice");
         assert_eq!(claims.role, Role::Utilisateur);
+        assert_eq!(claims.version_auth, 0);
     }
 
     #[test]
@@ -106,7 +110,7 @@ mod tests {
         // il est émis.
         let service = JwtService::new("secret".into(), -1);
         let jeton = service
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
             .unwrap();
 
         assert!(service.valider_token(&jeton).is_err());
@@ -117,7 +121,7 @@ mod tests {
         let service_a = JwtService::new("secret-a".into(), 24);
         let service_b = JwtService::new("secret-b".into(), 24);
         let jeton = service_a
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
             .unwrap();
 
         assert!(service_b.valider_token(&jeton).is_err());

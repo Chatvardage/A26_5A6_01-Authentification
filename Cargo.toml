@@ -81,6 +81,6 @@ validator = { version = "0.18", features = ["derive"] }
 # `ServiceExt::oneshot` : envoie une requête HTTP directement au `Router`
 # axum dans les tests, sans ouvrir de vraie socket TCP (voir
 # interface/http/routes.rs).
-tower = { version = "0.4", features = ["util"] }
+tower = { version = "0.5", features = ["util"] }
 # `Body::collect` pour lire le corps JSON des réponses de test.
 http-body-util = "0.1"

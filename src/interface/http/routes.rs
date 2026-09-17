@@ -5,11 +5,11 @@
 
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    http::{header, Method, StatusCode},
     routing::{get, patch, post},
     Router,
 };
-use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::state::AppState;
@@ -50,7 +50,11 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         )
         .route("/:id/role", patch(utilisateurs_controller::changer_role));
 
-    let cors_restreint = || CorsLayer::new().allow_methods(Any).allow_headers(Any);
+    let cors_restreint = || {
+        CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
+    };
     let cors = match origines_autorisees {
         None => {
             tracing::warn!("CORS_ALLOWED_ORIGINS est absente — aucune origine n'est autorisée");
@@ -89,8 +93,8 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
             } else {
                 CorsLayer::new()
                     .allow_origin(AllowOrigin::list(valeurs))
-                    .allow_methods(Any)
-                    .allow_headers(Any)
+                    .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                    .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
             }
         }
     };
@@ -771,7 +775,7 @@ mod tests {
         // Durée de vie négative : le jeton est expiré dès sa création.
         let service_expire = JwtService::new(ctx.secret.clone(), -1);
         let jeton = service_expire
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur)
+            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
             .unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
@@ -787,6 +791,7 @@ mod tests {
                 sub: "pas-un-uuid".into(),
                 pseudo: "alice".into(),
                 role: Role::Utilisateur,
+                version_auth: 0,
                 exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
             },
         );
@@ -878,6 +883,9 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
+
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
 
         // Le nouveau mot de passe doit désormais permettre la connexion.
         let (statut, _) = requete(
@@ -1272,6 +1280,44 @@ mod tests {
             .unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_ne_peut_pas_modifier_son_propre_compte_via_les_routes_admin() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_admin}"),
+            Some(&jeton_admin),
+            Some(json!({ "courriel": "admin2@example.com" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn admin_ne_peut_pas_supprimer_son_propre_compte_via_les_routes_admin() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            &format!("/api/users/{id_admin}"),
+            Some(&jeton_admin),
+            None,
+        )
+        .await;
         assert_eq!(statut, StatusCode::FORBIDDEN);
     }
 

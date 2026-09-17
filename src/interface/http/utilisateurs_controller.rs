@@ -62,6 +62,7 @@ pub async fn modifier(
     Json(requete): Json<ModifierUtilisateurRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
     exiger_admin(session.role)?;
+    exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
 
     let utilisateur = state.auth_service.modifier_utilisateur(id, requete).await?;
     tracing::info!(admin = %session.pseudo, cible = %id, "compte modifié par un administrateur");
@@ -75,6 +76,7 @@ pub async fn supprimer(
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, AppError> {
     exiger_admin(session.role)?;
+    exiger_un_autre_utilisateur(session.id_utilisateur, id)?;
 
     let supprime = state
         .depot_utilisateurs
@@ -116,4 +118,17 @@ pub async fn changer_role(
         "rôle modifié par un administrateur"
     );
     Ok(ReponseJson(utilisateur))
+}
+
+fn exiger_un_autre_utilisateur(
+    id_utilisateur_connecte: Uuid,
+    id_utilisateur_cible: Uuid,
+) -> Result<(), AppError> {
+    if id_utilisateur_cible == id_utilisateur_connecte {
+        Err(AppError::Interdit(
+            "utilisez /api/auth/me pour modifier ou supprimer votre propre compte".into(),
+        ))
+    } else {
+        Ok(())
+    }
 }

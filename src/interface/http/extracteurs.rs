@@ -88,5 +88,8 @@ where
 }
 
 fn mapper_rejet_path(rejet: PathRejection) -> AppError {
+    // Contrairement à JsonRejection, PathRejection retourne déjà 400 pour les
+    // erreurs de désérialisation des segments d'URL; on conserve donc le
+    // statut d'axum tel quel.
     AppError::Extraction(rejet.status(), rejet.body_text())
 }

@@ -145,8 +145,8 @@ mod tests {
 
         for (cle, valeur) in vars {
             match valeur {
-                Some(v) => std::env::set_var(cle, v),
-                None => std::env::remove_var(cle),
+                Some(v) => unsafe { std::env::set_var(cle, v) },
+                None => unsafe { std::env::remove_var(cle) },
             }
         }
 
@@ -154,8 +154,8 @@ mod tests {
 
         for (cle, valeur) in precedentes {
             match valeur {
-                Some(v) => std::env::set_var(&cle, v),
-                None => std::env::remove_var(&cle),
+                Some(v) => unsafe { std::env::set_var(&cle, v) },
+                None => unsafe { std::env::remove_var(&cle) },
             }
         }
 

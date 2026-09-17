@@ -397,6 +397,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn modifier_si_mot_de_passe_inchange_refuse_un_hash_perime() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("guarded-update");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash-actuel")
+            .await
+            .unwrap();
+
+        assert!(repo
+            .modifier_si_mot_de_passe_inchange(
+                cree.id,
+                "hash-perime",
+                Some("pseudo-inchange"),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            repo.trouver_par_id(cree.id).await.unwrap().unwrap().pseudo,
+            pseudo
+        );
+
+        repo.supprimer(cree.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn supprimer_si_mot_de_passe_inchange_supprime_seulement_avec_le_hash_actuel() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("guarded-delete");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash-actuel")
+            .await
+            .unwrap();
+
+        assert!(!repo
+            .supprimer_si_mot_de_passe_inchange(cree.id, "hash-perime")
+            .await
+            .unwrap());
+        assert!(repo
+            .supprimer_si_mot_de_passe_inchange(cree.id, "hash-actuel")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn modifier_refuse_un_pseudo_deja_pris() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         let pseudo_a = identifiant_unique("eve");

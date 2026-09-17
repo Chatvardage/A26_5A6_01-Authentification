@@ -394,6 +394,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn operations_conditionnelles_refusent_un_hash_perime() {
+        let repo = FakeUtilisateurRepository::new();
+        let utilisateur = repo
+            .creer("alice", "alice@example.com", "hash-actuel")
+            .await
+            .unwrap();
+        repo.creer("bob", "bob@example.com", "hash-bob")
+            .await
+            .unwrap();
+
+        assert!(repo
+            .modifier_si_mot_de_passe_inchange(
+                utilisateur.id,
+                "hash-perime",
+                Some("alice2"),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+            .is_none());
+        assert!(matches!(
+            repo.modifier_si_mot_de_passe_inchange(
+                utilisateur.id,
+                "hash-actuel",
+                Some("bob"),
+                None,
+                None,
+            )
+            .await,
+            Err(RepoError::Conflit)
+        ));
+        assert_eq!(
+            repo.modifier_si_mot_de_passe_inchange(
+                utilisateur.id,
+                "hash-actuel",
+                Some("alice2"),
+                Some("alice2@example.com"),
+                Some("hash-nouveau"),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .pseudo,
+            "alice2"
+        );
+        assert!(!repo
+            .supprimer_si_mot_de_passe_inchange(utilisateur.id, "hash-actuel")
+            .await
+            .unwrap());
+        assert!(repo
+            .supprimer_si_mot_de_passe_inchange(utilisateur.id, "hash-nouveau")
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
     async fn lister_trie_du_plus_recent_au_plus_ancien() {
         let repo = FakeUtilisateurRepository::new();
         let premier = repo

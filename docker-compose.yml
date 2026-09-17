@@ -45,7 +45,9 @@ services:
     build: .
     container_name: chatvardage-auth-api
     ports:
-      - "3001:3001"
+      # Le Gateway porte la limitation de débit en intégration. En mode
+      # autonome, l'API reste donc accessible seulement depuis l'hôte.
+      - "127.0.0.1:3001:3001"
     environment:
       # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
       # Prisma) avec un avertissement — inutile ici, la base n'a qu'un

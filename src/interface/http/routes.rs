@@ -493,6 +493,9 @@ mod tests {
             .unwrap();
         let reponse = ctx.app.oneshot(requete).await.unwrap();
         assert_eq!(reponse.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let corps = reponse.into_body().collect().await.unwrap().to_bytes();
+        let corps: serde_json::Value = serde_json::from_slice(&corps).unwrap();
+        assert_eq!(corps["erreur"], "corps de requête trop volumineux");
     }
 
     #[tokio::test]
@@ -605,7 +608,7 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
-        assert!(corps["erreur"].as_str().unwrap().contains("courriel"));
+        assert_eq!(corps["erreur"], "corps JSON invalide");
     }
 
     #[tokio::test]
@@ -1496,7 +1499,7 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
-        assert!(corps["erreur"].as_str().is_some());
+        assert_eq!(corps["erreur"], "corps JSON invalide");
     }
 
     #[tokio::test]
@@ -1519,7 +1522,7 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
-        assert!(corps["erreur"].as_str().is_some());
+        assert_eq!(corps["erreur"], "paramètre d'URL invalide");
     }
 
     #[tokio::test]

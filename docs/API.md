@@ -41,10 +41,9 @@ finalement distinguer les deux.
 | Supprimer son propre compte | ✅ `DELETE /api/auth/me` | ✅ `DELETE /api/auth/me` |
 | Supprimer le compte d'un autre utilisateur | ❌ | ✅ `DELETE /api/users/{id}` |
 
-Un utilisateur ne peut jamais changer son propre rôle (ni celui de
-personne d'autre) — seul un `admin`, via `PATCH /api/users/{id}/role`,
-le peut. C'est volontaire : sinon n'importe quel compte pourrait
-s'auto-promouvoir `admin`.
+Seul un `admin`, via `PATCH /api/users/{id}/role`, peut changer un rôle,
+le sien ou celui d'un autre compte. Un utilisateur ou modérateur ne peut
+jamais s'auto-promouvoir `admin`.
 
 ---
 
@@ -62,8 +61,10 @@ syntaxiquement invalide, un champ manquant ou du mauvais type (ex.
 segment d'URL qui ne parse pas (ex. un `id` qui n'est pas un UUID) : les
 handlers utilisent des extracteurs `Json`/`Path` personnalisés
 (`src/interface/http/extracteurs.rs`) qui reformatent toute erreur
-d'extraction axum vers cette même enveloppe, plutôt que le corps en texte
-brut renvoyé par défaut par `axum::extract::Json`/`Path`.
+d'extraction axum vers cette même enveloppe, avec les messages génériques
+`"corps JSON invalide"`, `"paramètre d'URL invalide"` ou `"corps de
+requête trop volumineux"`, plutôt que le corps technique brut renvoyé par
+défaut par `axum::extract::Json`/`Path`.
 
 Pour une erreur de validation `validator` (`application/dto.rs`), le
 message a la forme `"<champ>: <message>"` (ex. `"pseudo: le pseudo doit

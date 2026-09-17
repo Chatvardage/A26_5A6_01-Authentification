@@ -135,7 +135,9 @@ impl AuthService {
         // suffire à prendre le contrôle permanent du compte (voir doc de
         // `ModifierProfilRequest::mot_de_passe_actuel`). Un changement de
         // pseudo seul n'a pas besoin de cette confirmation.
-        if requete.courriel.is_some() || requete.mot_de_passe.is_some() {
+        let mot_de_passe_hache_actuel = if requete.courriel.is_some()
+            || requete.mot_de_passe.is_some()
+        {
             let mot_de_passe_actuel = requete
                 .mot_de_passe_actuel
                 .as_deref()
@@ -161,7 +163,10 @@ impl AuthService {
                     "mot de passe actuel incorrect".into(),
                 ));
             }
-        }
+            Some(utilisateur_actuel.mot_de_passe_hache)
+        } else {
+            None
+        };
 
         let hache_mot_de_passe = match requete.mot_de_passe.as_deref() {
             Some(mot_de_passe) => Some(hacher_mot_de_passe(mot_de_passe).await?),
@@ -169,18 +174,11 @@ impl AuthService {
         };
         let courriel = requete.courriel.as_deref().map(normaliser_courriel);
 
-        let utilisateur = if requete.courriel.is_some() || requete.mot_de_passe.is_some() {
-            let utilisateur_actuel = self
-                .depot
-                .trouver_par_id(id)
-                .await
-                .map_err(|e| AppError::Interne(e.to_string()))?
-                .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
-
+        let utilisateur = if let Some(mot_de_passe_hache_actuel) = mot_de_passe_hache_actuel {
             self.depot
                 .modifier_si_mot_de_passe_inchange(
                     id,
-                    &utilisateur_actuel.mot_de_passe_hache,
+                    &mot_de_passe_hache_actuel,
                     requete.pseudo.as_deref(),
                     courriel.as_deref(),
                     hache_mot_de_passe.as_deref(),

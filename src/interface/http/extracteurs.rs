@@ -66,7 +66,12 @@ fn mapper_rejet_json(rejet: JsonRejection) -> AppError {
         StatusCode::PAYLOAD_TOO_LARGE => StatusCode::PAYLOAD_TOO_LARGE,
         _ => StatusCode::BAD_REQUEST,
     };
-    AppError::Extraction(statut, rejet.body_text())
+    let message = if statut == StatusCode::PAYLOAD_TOO_LARGE {
+        "corps de requête trop volumineux"
+    } else {
+        "corps JSON invalide"
+    };
+    AppError::Extraction(statut, message.into())
 }
 
 pub struct Path<T>(pub T);
@@ -87,9 +92,8 @@ where
     }
 }
 
-fn mapper_rejet_path(rejet: PathRejection) -> AppError {
-    // Contrairement à JsonRejection, PathRejection retourne déjà 400 pour les
-    // erreurs de désérialisation des segments d'URL; on conserve donc le
-    // statut d'axum tel quel.
-    AppError::Extraction(rejet.status(), rejet.body_text())
+fn mapper_rejet_path(_rejet: PathRejection) -> AppError {
+    // Axum retourne déjà 400 pour les erreurs de désérialisation des segments
+    // d'URL; on conserve ce statut, mais pas son message technique.
+    AppError::Extraction(_rejet.status(), "paramètre d'URL invalide".into())
 }

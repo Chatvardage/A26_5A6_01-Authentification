@@ -65,6 +65,28 @@ async fn main() {
         .expect("impossible d'ouvrir le port d'écoute");
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(attendre_signal_arret())
         .await
         .expect("le serveur HTTP s'est arrêté de façon inattendue");
+}
+
+#[cfg(unix)]
+async fn attendre_signal_arret() {
+    use tokio::signal::unix::{signal, SignalKind};
+
+    let mut sigterm =
+        signal(SignalKind::terminate()).expect("impossible d'écouter le signal SIGTERM");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
+    tracing::info!("signal d'arrêt reçu, fin des requêtes en cours");
+}
+
+#[cfg(not(unix))]
+async fn attendre_signal_arret() {
+    tokio::signal::ctrl_c()
+        .await
+        .expect("impossible d'écouter le signal d'arrêt");
+    tracing::info!("signal d'arrêt reçu, fin des requêtes en cours");
 }

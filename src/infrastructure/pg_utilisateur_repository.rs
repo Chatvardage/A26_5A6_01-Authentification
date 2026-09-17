@@ -64,17 +64,14 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         &self,
         identifiant: &str,
     ) -> Result<Option<Utilisateur>, RepoError> {
-        // `courriel = LOWER($1)` : la colonne est toujours stockée en
-        // minuscules (voir `AuthService::inscrire`/`modifier_*`, qui
-        // normalisent avant d'appeler ce dépôt) — c'est `identifiant`, la
-        // valeur tapée par la personne qui se connecte, qui peut avoir
-        // n'importe quelle casse. `pseudo`, lui, reste sensible à la
-        // casse (comparaison exacte), volontairement : rien dans
-        // l'énoncé n'exige l'insensibilité à la casse pour un pseudo, et
-        // le sujet initial ne signalait ce problème que pour le courriel.
+        // `LOWER(courriel) = LOWER($1)` rend la recherche de courriel
+        // insensible à la casse tout en permettant à PostgreSQL d'utiliser
+        // son index fonctionnel sur `LOWER(courriel)`. `pseudo`, lui, reste
+        // sensible à la casse (comparaison exacte), volontairement : rien
+        // dans l'énoncé n'exige l'insensibilité à la casse pour un pseudo.
         sqlx::query_as::<_, Utilisateur>(
             "SELECT id, pseudo, courriel, mot_de_passe_hache, role, cree_le, modifie_le \
-             FROM utilisateurs WHERE courriel = LOWER($1) OR pseudo = $1",
+             FROM utilisateurs WHERE LOWER(courriel) = LOWER($1) OR pseudo = $1",
         )
         .bind(identifiant)
         .fetch_optional(&self.pool)

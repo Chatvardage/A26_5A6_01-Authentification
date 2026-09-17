@@ -91,4 +91,4 @@ HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=5 \
 # Migrer AVANT de démarrer, jamais l'inverse (voir AGENTS.md, section
 # Docker) : si la migration échoue, le conteneur s'arrête plutôt que de
 # démarrer une API pointant vers un schéma obsolète ou incomplet.
-CMD ["sh", "-c", "npx prisma migrate deploy && ./chatvardage-auth"]
+CMD ["sh", "-c", "npx prisma migrate deploy && exec ./chatvardage-auth"]

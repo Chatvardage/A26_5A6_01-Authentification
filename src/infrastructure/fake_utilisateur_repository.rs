@@ -62,7 +62,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
 
         let deja_pris = utilisateurs
             .values()
-            .any(|u| u.pseudo == pseudo || u.courriel == courriel);
+            .any(|u| u.pseudo == pseudo || u.courriel.eq_ignore_ascii_case(courriel));
         if deja_pris {
             return Err(RepoError::Conflit);
         }
@@ -126,7 +126,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         let deja_pris = utilisateurs.values().any(|u| {
             u.id != id
                 && ((pseudo.is_some() && Some(u.pseudo.as_str()) == pseudo)
-                    || (courriel.is_some() && Some(u.courriel.as_str()) == courriel))
+                    || courriel.is_some_and(|courriel| u.courriel.eq_ignore_ascii_case(courriel)))
         });
         if deja_pris {
             return Err(RepoError::Conflit);
@@ -233,6 +233,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn creer_refuse_un_courriel_deja_pris_meme_a_la_casse_pres() {
+        let repo = FakeUtilisateurRepository::new();
+        repo.creer("alice", "alice@example.com", "hash")
+            .await
+            .unwrap();
+
+        let resultat = repo.creer("bob", "ALICE@example.com", "hash").await;
+        assert!(matches!(resultat, Err(RepoError::Conflit)));
+    }
+
+    #[tokio::test]
     async fn erreur_provoquee_touche_toutes_les_methodes() {
         let repo = FakeUtilisateurRepository::new();
         repo.provoquer_erreur_interne(true);
@@ -287,6 +298,20 @@ mod tests {
         let bob = repo.creer("bob", "bob@example.com", "hash").await.unwrap();
 
         let resultat = repo.modifier(bob.id, Some("alice"), None, None).await;
+        assert!(matches!(resultat, Err(RepoError::Conflit)));
+    }
+
+    #[tokio::test]
+    async fn modifier_refuse_un_courriel_deja_pris_meme_a_la_casse_pres() {
+        let repo = FakeUtilisateurRepository::new();
+        repo.creer("alice", "alice@example.com", "hash")
+            .await
+            .unwrap();
+        let bob = repo.creer("bob", "bob@example.com", "hash").await.unwrap();
+
+        let resultat = repo
+            .modifier(bob.id, None, Some("ALICE@example.com"), None)
+            .await;
         assert!(matches!(resultat, Err(RepoError::Conflit)));
     }
 

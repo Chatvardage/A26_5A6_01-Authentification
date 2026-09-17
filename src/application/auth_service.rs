@@ -169,17 +169,37 @@ impl AuthService {
         };
         let courriel = requete.courriel.as_deref().map(normaliser_courriel);
 
-        let utilisateur = self
-            .depot
-            .modifier(
-                id,
-                requete.pseudo.as_deref(),
-                courriel.as_deref(),
-                hache_mot_de_passe.as_deref(),
-            )
-            .await
-            .map_err(mapper_erreur_depot)?
-            .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+        let utilisateur = if requete.courriel.is_some() || requete.mot_de_passe.is_some() {
+            let utilisateur_actuel = self
+                .depot
+                .trouver_par_id(id)
+                .await
+                .map_err(|e| AppError::Interne(e.to_string()))?
+                .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?;
+
+            self.depot
+                .modifier_si_mot_de_passe_inchange(
+                    id,
+                    &utilisateur_actuel.mot_de_passe_hache,
+                    requete.pseudo.as_deref(),
+                    courriel.as_deref(),
+                    hache_mot_de_passe.as_deref(),
+                )
+                .await
+                .map_err(mapper_erreur_depot)?
+                .ok_or_else(|| AppError::NonAutorise("mot de passe actuel incorrect".into()))?
+        } else {
+            self.depot
+                .modifier(
+                    id,
+                    requete.pseudo.as_deref(),
+                    courriel.as_deref(),
+                    hache_mot_de_passe.as_deref(),
+                )
+                .await
+                .map_err(mapper_erreur_depot)?
+                .ok_or_else(|| AppError::Introuvable("utilisateur introuvable".into()))?
+        };
 
         Ok(UtilisateurPublic::from(utilisateur))
     }
@@ -213,14 +233,16 @@ impl AuthService {
 
         let supprime = self
             .depot
-            .supprimer(id)
+            .supprimer_si_mot_de_passe_inchange(id, &utilisateur_actuel.mot_de_passe_hache)
             .await
             .map_err(|e| AppError::Interne(e.to_string()))?;
 
         if supprime {
             Ok(())
         } else {
-            Err(AppError::Introuvable("utilisateur introuvable".into()))
+            Err(AppError::NonAutorise(
+                "mot de passe actuel incorrect".into(),
+            ))
         }
     }
 

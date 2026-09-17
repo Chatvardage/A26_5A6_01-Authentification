@@ -52,7 +52,28 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
         mot_de_passe_hache: Option<&str>,
     ) -> Result<Option<Utilisateur>, RepoError>;
 
+    /// Variante de `modifier` qui n'applique le changement que si le hash
+    /// vérifié juste avant est toujours celui stocké. Évite qu'un changement
+    /// concurrent de mot de passe contourne la confirmation du mot de passe
+    /// actuel entre sa vérification et l'écriture.
+    async fn modifier_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+        pseudo: Option<&str>,
+        courriel: Option<&str>,
+        mot_de_passe_hache: Option<&str>,
+    ) -> Result<Option<Utilisateur>, RepoError>;
+
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError>;
+
+    /// Variante de `supprimer` protégée contre la même course que
+    /// `modifier_si_mot_de_passe_inchange`.
+    async fn supprimer_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+    ) -> Result<bool, RepoError>;
 
     async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError>;
 

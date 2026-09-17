@@ -126,6 +126,51 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         Ok(resultat.rows_affected() > 0)
     }
 
+    async fn modifier_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+        pseudo: Option<&str>,
+        courriel: Option<&str>,
+        mot_de_passe_hache: Option<&str>,
+    ) -> Result<Option<Utilisateur>, RepoError> {
+        sqlx::query_as::<_, Utilisateur>(
+            r#"
+            UPDATE utilisateurs
+            SET pseudo = COALESCE($3, pseudo),
+                courriel = COALESCE($4, courriel),
+                mot_de_passe_hache = COALESCE($5, mot_de_passe_hache),
+                version_auth = version_auth + CASE WHEN $5 IS NULL THEN 0 ELSE 1 END,
+                modifie_le = now()
+            WHERE id = $1 AND mot_de_passe_hache = $2
+            RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
+            "#,
+        )
+        .bind(id)
+        .bind(mot_de_passe_hache_actuel)
+        .bind(pseudo)
+        .bind(courriel)
+        .bind(mot_de_passe_hache)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)
+    }
+
+    async fn supprimer_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+    ) -> Result<bool, RepoError> {
+        let resultat =
+            sqlx::query("DELETE FROM utilisateurs WHERE id = $1 AND mot_de_passe_hache = $2")
+                .bind(id)
+                .bind(mot_de_passe_hache_actuel)
+                .execute(&self.pool)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        Ok(resultat.rows_affected() > 0)
+    }
+
     async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
             r#"

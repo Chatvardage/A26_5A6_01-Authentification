@@ -154,6 +154,62 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         Ok(self.utilisateurs.write().await.remove(&id).is_some())
     }
 
+    async fn modifier_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+        pseudo: Option<&str>,
+        courriel: Option<&str>,
+        mot_de_passe_hache: Option<&str>,
+    ) -> Result<Option<Utilisateur>, RepoError> {
+        self.verifier_erreur_provoquee()?;
+
+        let mut utilisateurs = self.utilisateurs.write().await;
+        let deja_pris = utilisateurs.values().any(|u| {
+            u.id != id
+                && ((pseudo.is_some() && Some(u.pseudo.as_str()) == pseudo)
+                    || courriel.is_some_and(|courriel| u.courriel.eq_ignore_ascii_case(courriel)))
+        });
+        if deja_pris {
+            return Err(RepoError::Conflit);
+        }
+
+        Ok(utilisateurs.get_mut(&id).and_then(|u| {
+            (u.mot_de_passe_hache == mot_de_passe_hache_actuel).then(|| {
+                if let Some(pseudo) = pseudo {
+                    u.pseudo = pseudo.to_string();
+                }
+                if let Some(courriel) = courriel {
+                    u.courriel = courriel.to_string();
+                }
+                if let Some(hache) = mot_de_passe_hache {
+                    u.mot_de_passe_hache = hache.to_string();
+                    u.version_auth += 1;
+                }
+                u.modifie_le = Utc::now();
+                u.clone()
+            })
+        }))
+    }
+
+    async fn supprimer_si_mot_de_passe_inchange(
+        &self,
+        id: Uuid,
+        mot_de_passe_hache_actuel: &str,
+    ) -> Result<bool, RepoError> {
+        self.verifier_erreur_provoquee()?;
+
+        let mut utilisateurs = self.utilisateurs.write().await;
+        let Some(utilisateur) = utilisateurs.get(&id) else {
+            return Ok(false);
+        };
+        if utilisateur.mot_de_passe_hache != mot_de_passe_hache_actuel {
+            return Ok(false);
+        }
+        utilisateurs.remove(&id);
+        Ok(true)
+    }
+
     async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError> {
         self.verifier_erreur_provoquee()?;
         let mut utilisateurs = self.utilisateurs.write().await;
@@ -268,7 +324,17 @@ mod tests {
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(
+            repo.modifier_si_mot_de_passe_inchange(Uuid::new_v4(), "hash", Some("x"), None, None)
+                .await,
+            Err(RepoError::Interne(_))
+        ));
+        assert!(matches!(
             repo.supprimer(Uuid::new_v4()).await,
+            Err(RepoError::Interne(_))
+        ));
+        assert!(matches!(
+            repo.supprimer_si_mot_de_passe_inchange(Uuid::new_v4(), "hash")
+                .await,
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(

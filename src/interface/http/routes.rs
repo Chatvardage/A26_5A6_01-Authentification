@@ -41,7 +41,10 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         );
 
     let api_users = Router::new()
-        .route("/", get(utilisateurs_controller::lister))
+        .route(
+            "/",
+            get(utilisateurs_controller::lister).post(utilisateurs_controller::creer),
+        )
         .route(
             "/:id",
             get(utilisateurs_controller::obtenir)
@@ -256,9 +259,8 @@ mod tests {
 
     /// Promeut un compte admin directement via le dépôt (voir README :
     /// c'est une opération manuelle, il n'existe pas de route d'API pour
-    /// s'auto-promouvoir), puis se reconnecte pour obtenir un jeton dont
-    /// la revendication `role` reflète la promotion (le rôle est figé au
-    /// moment de l'émission du jeton — voir `JwtService::generer_token`).
+    /// s'auto-promouvoir), puis se reconnecte pour obtenir un jeton à la
+    /// nouvelle `version_auth`.
     async fn promouvoir_admin_et_relogin(
         ctx: &Contexte,
         id: Uuid,
@@ -778,7 +780,7 @@ mod tests {
         // Durée de vie négative : le jeton est expiré dès sa création.
         let service_expire = JwtService::new(ctx.secret.clone(), -1);
         let jeton = service_expire
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
+            .generer_token(Uuid::new_v4(), "alice", 0)
             .unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
@@ -793,7 +795,6 @@ mod tests {
             Claims {
                 sub: "pas-un-uuid".into(),
                 pseudo: "alice".into(),
-                role: Role::Utilisateur,
                 version_auth: 0,
                 exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
             },
@@ -1233,6 +1234,20 @@ mod tests {
 
         let (statut, _) = requete(
             &ctx.app,
+            "POST",
+            "/api/users",
+            Some(&jeton),
+            Some(json!({
+                "pseudo": "bob",
+                "courriel": "bob@example.com",
+                "mot_de_passe": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::FORBIDDEN);
+
+        let (statut, _) = requete(
+            &ctx.app,
             "PATCH",
             &format!("/api/users/{id}"),
             Some(&jeton),
@@ -1283,7 +1298,7 @@ mod tests {
             .unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/users", Some(&jeton_admin), None).await;
-        assert_eq!(statut, StatusCode::FORBIDDEN);
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
@@ -1359,6 +1374,33 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn admin_cree_un_compte_standard_sans_le_connecter() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/users",
+            Some(&jeton_admin),
+            Some(json!({
+                "pseudo": "alice",
+                "courriel": "Alice@Example.com",
+                "mot_de_passe": "motdepasse123",
+            })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["pseudo"], "alice");
+        assert_eq!(corps["courriel"], "alice@example.com");
+        assert_eq!(corps["role"], "utilisateur");
+        assert!(corps.get("jeton").is_none());
     }
 
     #[tokio::test]

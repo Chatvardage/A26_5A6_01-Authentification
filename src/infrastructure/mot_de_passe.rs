@@ -7,11 +7,29 @@
 
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-    Argon2,
+    Algorithm, Argon2, Params, Version,
 };
 use tokio::task;
 
 use crate::error::AppError;
+
+const COUT_MEMOIRE_ARGON2_KIO: u32 = 19 * 1024;
+const ITERATIONS_ARGON2: u32 = 2;
+const PARALLELISME_ARGON2: u32 = 1;
+
+fn argon2() -> Argon2<'static> {
+    // Paramètres Argon2id par défaut explicités : 19 Mio, deux itérations
+    // et une voie. Ce compromis ralentit une attaque hors ligne tout en
+    // restant raisonnable pour une authentification interactive.
+    let params = Params::new(
+        COUT_MEMOIRE_ARGON2_KIO,
+        ITERATIONS_ARGON2,
+        PARALLELISME_ARGON2,
+        None,
+    )
+    .expect("les paramètres Argon2 constants sont valides");
+    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
+}
 
 /// Hache un mot de passe en clair sans bloquer un worker Tokio. Le "sel"
 /// (salt) est généré aléatoirement à chaque appel : deux utilisateurs avec
@@ -21,7 +39,7 @@ pub async fn hacher_mot_de_passe(clair: &str) -> Result<String, AppError> {
     let clair = clair.to_owned();
     task::spawn_blocking(move || {
         let sel = SaltString::generate(&mut OsRng);
-        let argon2 = Argon2::default();
+        let argon2 = argon2();
         let hache = argon2
             .hash_password(clair.as_bytes(), &sel)
             .map_err(|e| AppError::Interne(format!("échec du hachage du mot de passe: {e}")))?;
@@ -41,7 +59,7 @@ pub async fn verifier_mot_de_passe(clair: &str, hache: &str) -> Result<bool, App
         let Ok(hache_analyse) = PasswordHash::new(&hache) else {
             return Ok(false);
         };
-        Ok(Argon2::default()
+        Ok(argon2()
             .verify_password(clair.as_bytes(), &hache_analyse)
             .is_ok())
     })
@@ -65,6 +83,15 @@ mod tests {
         assert!(verifier_mot_de_passe("motdepasse123", &hache)
             .await
             .expect("la vérification doit réussir"));
+    }
+
+    #[test]
+    fn parametres_argon2_sont_explicitement_calibres() {
+        let argon2 = argon2();
+        let params = argon2.params();
+        assert_eq!(params.m_cost(), COUT_MEMOIRE_ARGON2_KIO);
+        assert_eq!(params.t_cost(), ITERATIONS_ARGON2);
+        assert_eq!(params.p_cost(), PARALLELISME_ARGON2);
     }
 
     #[tokio::test]

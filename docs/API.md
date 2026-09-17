@@ -35,6 +35,7 @@ finalement distinguer les deux.
 | Lire son propre profil | ✅ `GET /api/auth/me` | ✅ `GET /api/auth/me` |
 | Lire le profil d'un autre utilisateur | ❌ | ✅ `GET /api/users/{id}` |
 | Lister tous les comptes | ❌ | ✅ `GET /api/users` |
+| Créer un compte | ❌ | ✅ `POST /api/users` |
 | Modifier son propre profil (pseudo/courriel/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
 | Modifier le profil d'un autre utilisateur | ❌ | ✅ `PATCH /api/users/{id}` |
 | Changer le rôle d'un compte | ❌ (pas même le sien) | ✅ `PATCH /api/users/{id}/role` |
@@ -259,11 +260,29 @@ mot de passe actuel incorrect).
 Réservé aux comptes `admin` : gestion de **n'importe quel** compte, pas
 seulement le sien (voir [Permissions](#permissions--qui-peut-faire-quoi)).
 
+Les contrôles d'autorisation ont priorité sur la validation du corps :
+une requête sans droits suffisants reçoit `403`, même si son JSON est
+invalide.
+
 ### GET /api/users 🔒👑
 
 Liste tous les comptes inscrits.
 
 **Réponse `200`** : tableau d'objets utilisateur (même forme que `GET /api/auth/me`).
+
+---
+
+### POST /api/users 🔒👑
+
+Crée un compte standard sans connecter ce nouveau compte. Utilise le même
+corps et les mêmes règles de validation que `POST /api/auth/register`; le
+rôle initial est toujours `utilisateur` et peut ensuite être modifié par
+`PATCH /api/users/{id}/role`.
+
+**Réponse `200`** : l'objet utilisateur créé (sans jeton).
+
+**Erreurs** : `400` (validation), `403` (non-admin), `409` (pseudo ou
+courriel déjà pris).
 
 ---
 

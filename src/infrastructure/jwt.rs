@@ -12,7 +12,6 @@ use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation}
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::utilisateur::Role;
 use crate::error::AppError;
 
 /// Contenu ("claims") encodé dans le jeton. `sub` et `exp` sont des noms
@@ -23,11 +22,14 @@ use crate::error::AppError;
 ///   l'utilisateur.
 /// - `exp` (expiration) : vérifié automatiquement par la crate
 ///   `jsonwebtoken` au décodage — un jeton expiré est rejeté.
+///
+/// Le rôle n'est volontairement pas un claim : une autorisation doit
+/// toujours s'appuyer sur le rôle courant stocké par ce service, jamais sur
+/// une valeur figée lors de l'émission du jeton.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub pseudo: String,
-    pub role: Role,
     pub version_auth: i32,
     pub exp: usize,
 }
@@ -49,7 +51,6 @@ impl JwtService {
         &self,
         id_utilisateur: Uuid,
         pseudo: &str,
-        role: Role,
         version_auth: i32,
     ) -> Result<String, AppError> {
         let expiration = Utc::now()
@@ -60,7 +61,6 @@ impl JwtService {
         let claims = Claims {
             sub: id_utilisateur.to_string(),
             pseudo: pseudo.to_string(),
-            role,
             version_auth,
             exp: expiration,
         };
@@ -93,14 +93,11 @@ mod tests {
         let service = JwtService::new("secret".into(), 24);
         let id = Uuid::new_v4();
 
-        let jeton = service
-            .generer_token(id, "alice", Role::Utilisateur, 0)
-            .unwrap();
+        let jeton = service.generer_token(id, "alice", 0).unwrap();
         let claims = service.valider_token(&jeton).unwrap();
 
         assert_eq!(claims.sub, id.to_string());
         assert_eq!(claims.pseudo, "alice");
-        assert_eq!(claims.role, Role::Utilisateur);
         assert_eq!(claims.version_auth, 0);
     }
 
@@ -109,9 +106,7 @@ mod tests {
         // Durée de vie négative : le jeton est déjà expiré au moment où
         // il est émis.
         let service = JwtService::new("secret".into(), -1);
-        let jeton = service
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
-            .unwrap();
+        let jeton = service.generer_token(Uuid::new_v4(), "alice", 0).unwrap();
 
         assert!(service.valider_token(&jeton).is_err());
     }
@@ -120,9 +115,7 @@ mod tests {
     fn rejette_un_jeton_signe_avec_un_autre_secret() {
         let service_a = JwtService::new("secret-a".into(), 24);
         let service_b = JwtService::new("secret-b".into(), 24);
-        let jeton = service_a
-            .generer_token(Uuid::new_v4(), "alice", Role::Utilisateur, 0)
-            .unwrap();
+        let jeton = service_a.generer_token(Uuid::new_v4(), "alice", 0).unwrap();
 
         assert!(service_b.valider_token(&jeton).is_err());
     }

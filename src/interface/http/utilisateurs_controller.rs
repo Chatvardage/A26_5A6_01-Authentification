@@ -6,7 +6,7 @@
 use axum::{extract::State, http::StatusCode, Json as ReponseJson};
 use uuid::Uuid;
 
-use crate::application::dto::{ChangerRoleRequest, ModifierUtilisateurRequest};
+use crate::application::dto::{ChangerRoleRequest, InscriptionRequest, ModifierUtilisateurRequest};
 use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -33,6 +33,23 @@ pub async fn lister(
             .map(UtilisateurPublic::from)
             .collect(),
     ))
+}
+
+/// POST /api/users — crée un compte standard (admin uniquement).
+pub async fn creer(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+    Json(requete): Json<InscriptionRequest>,
+) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
+    exiger_admin(session.role)?;
+
+    let utilisateur = state.auth_service.creer_utilisateur(requete).await?;
+    tracing::info!(
+        admin = %session.pseudo,
+        cible = %utilisateur.id,
+        "compte créé par un administrateur"
+    );
+    Ok(ReponseJson(utilisateur))
 }
 
 /// GET /api/users/:id — retourne un compte précis (admin uniquement).

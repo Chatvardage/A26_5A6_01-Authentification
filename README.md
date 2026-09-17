@@ -69,8 +69,8 @@ et [Installation et lancement](#installation-et-lancement)).
 | **PostgreSQL + SQLx** | Base relationnelle robuste pour des données structurées (comptes, rôles). SQLx est asynchrone (compatible avec Axum/Tokio) et n'exige pas d'ORM lourd. |
 | **Prisma (migrations uniquement)** | Standardise la gestion des migrations de schéma avec le reste de l'équipe (le Room-Service l'utilise aussi) — la CLI Prisma est indépendante du langage du service qui l'utilise. Aucun client Prisma généré n'est utilisé au runtime : SQLx reste le seul point d'accès aux données depuis le code Rust. |
 | **Port** (`UtilisateurRepositoryPort`) | Le code métier ne dépend que d'une interface (`domain::ports::UtilisateurRepositoryPort`), pas directement de PostgreSQL — même principe que `ChatGateway` côté frontend. Une seule implémentation en production, `PgUtilisateurRepository` (SQLx) ; il n'y a pas de mode mock exposé à l'exécution. Un second dépôt en mémoire (`FakeUtilisateurRepository`) existe, mais uniquement compilé en mode test (`#[cfg(test)]`) pour les tests HTTP de bout en bout — voir [Lancer les tests](#lancer-les-tests). |
-| **Argon2** | Algorithme de hachage de mot de passe recommandé actuellement (résiste mieux aux attaques par GPU que bcrypt/MD5/SHA simple). Ses calculs CPU-bound sont exécutés dans le pool bloquant de Tokio afin de préserver les workers HTTP. |
-| **JWT (jsonwebtoken)** | Chaque requête porte un jeton signé, dont la signature et l'expiration sont vérifiées avant de relire l'utilisateur en base. Une suppression ou un changement de rôle prend donc effet immédiatement, sans stockage de session. |
+| **Argon2id** | Algorithme de hachage de mot de passe recommandé actuellement (résiste mieux aux attaques par GPU que bcrypt/MD5/SHA simple), calibré explicitement à 19 Mio, 2 itérations et 1 voie. Ses calculs CPU-bound sont exécutés dans le pool bloquant de Tokio afin de préserver les workers HTTP. |
+| **JWT (jsonwebtoken)** | Chaque requête porte un jeton signé, dont la signature et l'expiration sont vérifiées avant de relire l'utilisateur en base. Le rôle ne fait pas partie du jeton et doit toujours être lu depuis ce service; une suppression ou un changement de rôle prend donc effet immédiatement, sans stockage de session. |
 | **Docker multi-stage** | Une étape compile le binaire Rust avec `rust:1.88.0-slim-bookworm`, une autre installe la CLI Prisma avec `node:20.19.1-bookworm-slim` (Node.js et Prisma sont figés) et exécute `npx prisma generate` ; l'image finale embarque le binaire Rust compilé, Node.js et `prisma/` pour exécuter `npx prisma migrate deploy` au démarrage avant de lancer le binaire — même séquence que les microservices Node de l'équipe (voir [Installation et lancement](#installation-et-lancement)), adaptée à un runtime Rust. |
 
 ## Architecture du service
@@ -182,7 +182,7 @@ les commentaires dans `prisma/schema.prisma` pour le détail) :
 | `pseudo` | texte | unique, non nul |
 | `courriel` | texte | unique, non nul |
 | `mot_de_passe_hache` | texte | non nul (hash Argon2, jamais le mot de passe en clair) |
-| `version_auth` | entier | non nul, incrémenté à chaque changement de mot de passe pour révoquer les JWT antérieurs |
+| `version_auth` | entier | non nul, incrémenté à chaque changement de mot de passe ou de rôle pour révoquer les JWT antérieurs |
 | `role` | texte | non nul, valeurs attendues : `admin`, `moderateur`, `utilisateur` (défaut : `utilisateur`) |
 | `cree_le` | horodatage avec fuseau | non nul |
 | `modifie_le` | horodatage avec fuseau | non nul |
@@ -373,12 +373,8 @@ curl -X POST http://localhost:3001/api/auth/login \
 curl http://localhost:3001/api/auth/me -H "Authorization: Bearer <JETON>"
 ```
 
-**Vérifié** depuis une installation propre (`git clone` + `docker compose
-up --build`) : `/health` répond `ok`, l'inscription retourne un jeton et
-l'objet utilisateur, la connexion (pseudo ou courriel) fonctionne, et
-`GET /api/auth/me` avec ce jeton retourne le même profil — voir aussi la
-sortie `docker compose ps`/`pg_isready` consignée plus haut
-([Installation et lancement](#installation-et-lancement)).
+Les commandes ci-dessus permettent de vérifier le démarrage, l'inscription,
+la connexion et la consultation du profil sur une installation locale.
 
 ## Lancer les tests
 
@@ -436,6 +432,7 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/courriel/mot de passe) |
 | DELETE | `/api/auth/me` | oui | Supprimer son propre compte |
 | GET | `/api/users` | admin | Lister les comptes |
+| POST | `/api/users` | admin | Créer un compte |
 | GET | `/api/users/:id` | admin | Consulter un compte |
 | PATCH | `/api/users/:id` | admin | Modifier le pseudo/courriel d'un compte |
 | DELETE | `/api/users/:id` | admin | Supprimer un compte |
@@ -511,10 +508,7 @@ voir [Endpoints de l'API](#endpoints-de-lapi) — sans repasser par SQL.
   consciemment ici plutôt que corrigé, faute d'un flux de vérification par
   courriel qui serait hors de la portée de ce contrôle.
 
-### Note sur la vérification de ce projet
-
-Ce projet compile et tourne réellement — vérifié dans son intégralité,
-pas seulement relu :
+### Vérifications à exécuter avant une remise
 
 - `cargo build`, `cargo build --release`, `cargo fmt --check`,
   `cargo clippy --all-targets --all-features -- -D warnings` et

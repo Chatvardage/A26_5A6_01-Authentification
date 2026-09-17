@@ -123,6 +123,9 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         self.verifier_erreur_provoquee()?;
 
         let mut utilisateurs = self.utilisateurs.write().await;
+        if !utilisateurs.contains_key(&id) {
+            return Ok(None);
+        }
 
         let deja_pris = utilisateurs.values().any(|u| {
             u.id != id
@@ -165,6 +168,9 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         self.verifier_erreur_provoquee()?;
 
         let mut utilisateurs = self.utilisateurs.write().await;
+        if !utilisateurs.contains_key(&id) {
+            return Ok(None);
+        }
         let deja_pris = utilisateurs.values().any(|u| {
             u.id != id
                 && ((pseudo.is_some() && Some(u.pseudo.as_str()) == pseudo)
@@ -215,6 +221,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         let mut utilisateurs = self.utilisateurs.write().await;
         Ok(utilisateurs.get_mut(&id).map(|u| {
             u.role = role.as_str().to_string();
+            u.version_auth += 1;
             u.modifie_le = Utc::now();
             u.clone()
         }))
@@ -367,6 +374,23 @@ mod tests {
 
         let resultat = repo.modifier(bob.id, Some("alice"), None, None).await;
         assert!(matches!(resultat, Err(RepoError::Conflit)));
+    }
+
+    #[tokio::test]
+    async fn modifier_un_mot_de_passe_incremente_la_version_auth() {
+        let repo = FakeUtilisateurRepository::new();
+        let utilisateur = repo
+            .creer("alice", "alice@example.com", "hash-initial")
+            .await
+            .unwrap();
+
+        let modifie = repo
+            .modifier(utilisateur.id, None, None, Some("hash-nouveau"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(modifie.mot_de_passe_hache, "hash-nouveau");
+        assert_eq!(modifie.version_auth, utilisateur.version_auth + 1);
     }
 
     #[tokio::test]

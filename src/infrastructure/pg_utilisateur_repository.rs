@@ -2,11 +2,10 @@
 //! `domain::ports`). Regroupe tout le SQL lié aux utilisateurs : si un
 //! jour on change de base de données, seul ce fichier change.
 //!
-//! Ce service ne crée plus lui-même la table `utilisateurs` : un autre
-//! service de l'équipe gère les migrations. Le schéma attendu par les
-//! requêtes ci-dessous (noms de table et de colonnes en français) est
-//! documenté dans le README, section "Schéma de données attendu" — c'est
-//! la référence à partager avec la personne qui gère les migrations.
+//! Ce service ne crée pas directement la table `utilisateurs` au runtime :
+//! les migrations Prisma versionnées dans ce dépôt sont appliquées séparément,
+//! notamment par `npx prisma migrate deploy` au démarrage du conteneur. Le
+//! schéma attendu par les requêtes ci-dessous est documenté dans le README.
 
 use async_trait::async_trait;
 use sqlx::PgPool;
@@ -174,7 +173,8 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
     async fn changer_role(&self, id: Uuid, role: Role) -> Result<Option<Utilisateur>, RepoError> {
         sqlx::query_as::<_, Utilisateur>(
             r#"
-            UPDATE utilisateurs SET role = $2, modifie_le = now()
+            UPDATE utilisateurs
+            SET role = $2, version_auth = version_auth + 1, modifie_le = now()
             WHERE id = $1
             RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,

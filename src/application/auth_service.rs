@@ -55,13 +55,31 @@ impl AuthService {
         let jeton = self.jwt.generer_token(
             utilisateur.id,
             &utilisateur.pseudo,
-            utilisateur.role(),
             utilisateur.version_auth,
         )?;
         Ok(AuthResponse {
             jeton,
             utilisateur: UtilisateurPublic::from(utilisateur),
         })
+    }
+
+    /// `POST /api/users` : un administrateur crée un compte standard. Son
+    /// rôle peut ensuite être ajusté par `PATCH /api/users/{id}/role`.
+    pub async fn creer_utilisateur(
+        &self,
+        requete: InscriptionRequest,
+    ) -> Result<UtilisateurPublic, AppError> {
+        requete.validate().map_err(AppError::Validation)?;
+
+        let hache = hacher_mot_de_passe(&requete.mot_de_passe).await?;
+        let courriel = normaliser_courriel(&requete.courriel);
+        let utilisateur = self
+            .depot
+            .creer(&requete.pseudo, &courriel, &hache)
+            .await
+            .map_err(mapper_erreur_depot)?;
+
+        Ok(UtilisateurPublic::from(utilisateur))
     }
 
     pub async fn connecter(&self, requete: ConnexionRequest) -> Result<AuthResponse, AppError> {
@@ -106,7 +124,6 @@ impl AuthService {
         let jeton = self.jwt.generer_token(
             utilisateur.id,
             &utilisateur.pseudo,
-            utilisateur.role(),
             utilisateur.version_auth,
         )?;
         Ok(AuthResponse {

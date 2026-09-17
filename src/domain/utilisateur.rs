@@ -77,8 +77,8 @@ pub struct Utilisateur {
     /// Jamais exposé dans une réponse HTTP : voir `UtilisateurPublic`
     /// plus bas, qui est le type réellement renvoyé au frontend.
     pub mot_de_passe_hache: String,
-    /// Version incrémentée lors d'un changement de mot de passe afin
-    /// d'invalider les JWT précédemment émis.
+    /// Version incrémentée lors d'un changement de mot de passe ou de rôle
+    /// afin d'invalider les JWT précédemment émis.
     pub version_auth: i32,
     pub role: String,
     pub cree_le: chrono::DateTime<chrono::Utc>,

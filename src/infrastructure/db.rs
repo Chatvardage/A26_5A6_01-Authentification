@@ -1,10 +1,9 @@
 //! Connexion à PostgreSQL.
 //!
-//! Ce service ne crée plus la table `utilisateurs` lui-même : un autre service
-//! de l'équipe gère les migrations (voir README, section "Schéma de
-//! données attendu"). Ce fichier se contente donc d'ouvrir un pool de
-//! connexions — utilisé uniquement quand `USE_MOCK_DB` n'est pas activé
-//! (voir `main.rs`).
+//! Ce service ne crée pas directement la table `utilisateurs` au runtime :
+//! les migrations Prisma versionnées dans ce dépôt sont appliquées séparément,
+//! notamment par `npx prisma migrate deploy` au démarrage du conteneur.
+//! Ce fichier se contente d'ouvrir le pool PostgreSQL utilisé en production.
 
 use sqlx::postgres::{PgPool, PgPoolOptions};
 

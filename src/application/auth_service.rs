@@ -112,6 +112,11 @@ impl AuthService {
         // message d'erreur générique ci-dessous.
         let hache_a_verifier = match &utilisateur {
             Some(u) => u.mot_de_passe_hache.clone(),
+            // Invariant de sécurité : un échec de ce hachage factice
+            // indiquerait une panne interne d'Argon2 et empêcherait
+            // d'égaliser cette requête inconnue avec une tentative
+            // existante. L'erreur est propagée puis journalisée par
+            // `AppError::Interne`, sans révéler l'identifiant au client.
             None => hachage_factice().await?.to_string(),
         };
         let mot_de_passe_valide =

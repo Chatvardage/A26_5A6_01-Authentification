@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::domain::ports::{RepoError, UtilisateurRepositoryPort};
+use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
 use crate::domain::utilisateur::{Role, Utilisateur};
 
 #[derive(Clone)]
@@ -176,20 +176,37 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         &self,
         id: Uuid,
         role: Role,
-    ) -> Result<Option<Utilisateur>, RepoError> {
-        sqlx::query_as::<_, Utilisateur>(
+    ) -> Result<ResultatChangementRole, RepoError> {
+        let mut transaction = self.pool.begin().await.map_err(mapper_erreur_sql)?;
+        let role_actuel: Option<(String,)> =
+            sqlx::query_as("SELECT role FROM utilisateurs WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *transaction)
+                .await
+                .map_err(mapper_erreur_sql)?;
+
+        let Some((role_actuel,)) = role_actuel else {
+            return Ok(ResultatChangementRole::Introuvable);
+        };
+        if role_actuel == Role::Admin.as_str() {
+            return Ok(ResultatChangementRole::CibleAdmin);
+        }
+
+        let utilisateur = sqlx::query_as::<_, Utilisateur>(
             r#"
             UPDATE utilisateurs
             SET role = $2, version_auth = version_auth + 1, modifie_le = now()
-            WHERE id = $1 AND role <> 'admin'
+            WHERE id = $1
             RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
             "#,
         )
         .bind(id)
         .bind(role.as_str())
-        .fetch_optional(&self.pool)
+        .fetch_one(&mut *transaction)
         .await
-        .map_err(mapper_erreur_sql)
+        .map_err(mapper_erreur_sql)?;
+        transaction.commit().await.map_err(mapper_erreur_sql)?;
+        Ok(ResultatChangementRole::Modifie(utilisateur))
     }
 
     async fn verifier_sante(&self) -> Result<(), RepoError> {
@@ -491,30 +508,34 @@ mod tests {
             .await
             .unwrap();
 
-        let modifie = repo
+        let resultat = repo
             .changer_role_si_non_admin(cree.id, Role::Admin)
             .await
-            .unwrap()
             .unwrap();
+        let ResultatChangementRole::Modifie(modifie) = resultat else {
+            panic!("le compte non-admin doit pouvoir être promu");
+        };
         assert_eq!(modifie.role, "admin");
 
-        assert!(repo
-            .changer_role_si_non_admin(cree.id, Role::Utilisateur)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(matches!(
+            repo.changer_role_si_non_admin(cree.id, Role::Utilisateur)
+                .await
+                .unwrap(),
+            ResultatChangementRole::CibleAdmin
+        ));
 
         repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]
-    async fn changer_role_si_non_admin_id_inexistant_retourne_none() {
+    async fn changer_role_si_non_admin_id_inexistant_retourne_introuvable() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
-        assert!(repo
-            .changer_role_si_non_admin(Uuid::new_v4(), Role::Admin)
-            .await
-            .unwrap()
-            .is_none());
+        assert!(matches!(
+            repo.changer_role_si_non_admin(Uuid::new_v4(), Role::Admin)
+                .await
+                .unwrap(),
+            ResultatChangementRole::Introuvable
+        ));
     }
 
     #[tokio::test]

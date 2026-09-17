@@ -140,6 +140,9 @@ mod tests {
             .collect();
 
         for (cle, valeur) in vars {
+            // SAFETY: ce verrou partagé sérialise ces écritures avec les
+            // tests qui lisent `std::env`; la closure est terminée avant
+            // que le garde soit libéré.
             match valeur {
                 Some(v) => unsafe { std::env::set_var(cle, v) },
                 None => unsafe { std::env::remove_var(cle) },
@@ -149,6 +152,8 @@ mod tests {
         let resultat = std::panic::catch_unwind(f);
 
         for (cle, valeur) in precedentes {
+            // SAFETY: même garantie que pour l'écriture temporaire
+            // ci-dessus; la restauration reste protégée par le garde.
             match valeur {
                 Some(v) => unsafe { std::env::set_var(&cle, v) },
                 None => unsafe { std::env::remove_var(&cle) },

@@ -7,6 +7,7 @@ use axum::{extract::State, http::StatusCode, Json as ReponseJson};
 use uuid::Uuid;
 
 use crate::application::dto::{ChangerRoleRequest, InscriptionRequest, ModifierUtilisateurRequest};
+use crate::domain::ports::ResultatChangementRole;
 use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -120,20 +121,15 @@ pub async fn changer_role(
         .await
         .map_err(|e| AppError::Interne(e.to_string()))?
     {
-        Some(utilisateur) => utilisateur,
-        None => match state
-            .depot_utilisateurs
-            .trouver_par_id(id)
-            .await
-            .map_err(|e| AppError::Interne(e.to_string()))?
-        {
-            Some(_) => {
-                return Err(AppError::Interdit(
-                    "le rôle d'un administrateur ne peut pas être modifié".into(),
-                ));
-            }
-            None => return Err(AppError::Introuvable("utilisateur introuvable".into())),
-        },
+        ResultatChangementRole::Modifie(utilisateur) => utilisateur,
+        ResultatChangementRole::CibleAdmin => {
+            return Err(AppError::Interdit(
+                "le rôle d'un administrateur ne peut pas être modifié".into(),
+            ));
+        }
+        ResultatChangementRole::Introuvable => {
+            return Err(AppError::Introuvable("utilisateur introuvable".into()));
+        }
     };
 
     let utilisateur = UtilisateurPublic::from(utilisateur);

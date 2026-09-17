@@ -17,7 +17,7 @@ use chrono::Utc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::domain::ports::{RepoError, UtilisateurRepositoryPort};
+use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
 use crate::domain::utilisateur::{Role, Utilisateur};
 
 #[derive(Default)]
@@ -247,7 +247,7 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         &self,
         id: Uuid,
         role: Role,
-    ) -> Result<Option<Utilisateur>, RepoError> {
+    ) -> Result<ResultatChangementRole, RepoError> {
         self.verifier_erreur_provoquee()?;
         let mut utilisateurs = self.utilisateurs.write().await;
         if self
@@ -255,18 +255,18 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             .swap(false, Ordering::SeqCst)
         {
             utilisateurs.remove(&id);
-            return Ok(None);
+            return Ok(ResultatChangementRole::Introuvable);
         }
         let Some(utilisateur) = utilisateurs.get_mut(&id) else {
-            return Ok(None);
+            return Ok(ResultatChangementRole::Introuvable);
         };
         if utilisateur.role == Role::Admin.as_str() {
-            return Ok(None);
+            return Ok(ResultatChangementRole::CibleAdmin);
         }
         utilisateur.role = role.as_str().to_string();
         utilisateur.version_auth += 1;
         utilisateur.modifie_le = Utc::now();
-        Ok(Some(utilisateur.clone()))
+        Ok(ResultatChangementRole::Modifie(utilisateur.clone()))
     }
 
     async fn verifier_sante(&self) -> Result<(), RepoError> {

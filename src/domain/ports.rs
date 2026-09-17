@@ -82,7 +82,7 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
         &self,
         id: Uuid,
         role: Role,
-    ) -> Result<Option<Utilisateur>, RepoError>;
+    ) -> Result<ResultatChangementRole, RepoError>;
 
     /// Confirme que le stockage sous-jacent répond réellement (ex. `SELECT
     /// 1` pour `PgUtilisateurRepository`) — utilisé par `GET /health`
@@ -92,6 +92,15 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     /// confirmer que le processus HTTP tourne, pas que sa dépendance
     /// critique (la base de données) est joignable.
     async fn verifier_sante(&self) -> Result<(), RepoError>;
+}
+
+/// Résultat explicite d'une tentative de changement de rôle. Sépare une
+/// cible absente d'une cible admin, sans faire deviner la raison au
+/// contrôleur à partir d'un `Option`.
+pub enum ResultatChangementRole {
+    Modifie(Utilisateur),
+    CibleAdmin,
+    Introuvable,
 }
 
 /// Erreur générique de stockage, indépendante de PostgreSQL : ni

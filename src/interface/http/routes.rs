@@ -259,7 +259,7 @@ mod tests {
         .await;
         assert_eq!(
             statut,
-            StatusCode::OK,
+            StatusCode::CREATED,
             "échec d'inscription inattendu: {corps:?}"
         );
         let id = Uuid::parse_str(corps["utilisateur"]["id"].as_str().unwrap()).unwrap();
@@ -615,7 +615,7 @@ mod tests {
             })),
         )
         .await;
-        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(statut, StatusCode::CREATED);
     }
 
     #[tokio::test]
@@ -1489,7 +1489,7 @@ mod tests {
             })),
         )
         .await;
-        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(statut, StatusCode::CREATED);
         assert_eq!(corps["pseudo"], "alice");
         assert_eq!(corps["courriel"], "alice@example.com");
         assert_eq!(corps["role"], "utilisateur");

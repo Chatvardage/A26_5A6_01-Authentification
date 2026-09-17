@@ -19,9 +19,9 @@ use super::middleware::UtilisateurAuthentifie;
 pub async fn register(
     State(state): State<AppState>,
     Json(requete): Json<InscriptionRequest>,
-) -> Result<ReponseJson<AuthResponse>, AppError> {
+) -> Result<(StatusCode, ReponseJson<AuthResponse>), AppError> {
     let reponse = state.auth_service.inscrire(requete).await?;
-    Ok(ReponseJson(reponse))
+    Ok((StatusCode::CREATED, ReponseJson(reponse)))
 }
 
 /// POST /api/auth/login

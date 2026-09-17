@@ -129,7 +129,7 @@ inscription, pas besoin d'un second appel à `/login`).
 | courriel | format courriel valide, 254 caractères maximum (RFC 5321) ; normalisé en minuscules avant stockage |
 | mot_de_passe | 8 à 128 caractères |
 
-**Réponse `200`**
+**Réponse `201`**
 
 ```json
 {
@@ -229,7 +229,7 @@ permanente, bien après l'expiration normale du jeton.
 
 **Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
 
-**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant, invalide, expiré, associé à un compte supprimé, ou `mot_de_passe_actuel` incorrect), `409` (pseudo ou courriel déjà pris par un autre compte).
+**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant, invalide, expiré, associé à un compte supprimé, ou `mot_de_passe_actuel` incorrect), `404` si le compte est supprimé concurremment après l'authentification, `409` (pseudo ou courriel déjà pris par un autre compte).
 
 ---
 
@@ -285,7 +285,7 @@ corps et les mêmes règles de validation que `POST /api/auth/register`; le
 rôle initial est toujours `utilisateur` et peut ensuite être modifié par
 `PATCH /api/users/{id}/role`.
 
-**Réponse `200`** : l'objet utilisateur créé (sans jeton).
+**Réponse `201`** : l'objet utilisateur créé (sans jeton).
 
 **Erreurs** : `400` (validation), `403` (non-admin), `409` (pseudo ou
 courriel déjà pris).

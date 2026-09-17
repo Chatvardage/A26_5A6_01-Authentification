@@ -21,7 +21,7 @@ WORKDIR /app
 # change pas, Docker réutilise ce cache même si le code source (src/)
 # change — évite de re-télécharger/recompiler toutes les dépendances à
 # chaque petite modification.
-COPY Cargo.toml Cargo.lock* ./
+COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
 

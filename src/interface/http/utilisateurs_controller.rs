@@ -42,14 +42,14 @@ pub async fn creer(
     State(state): State<AppState>,
     AdministrateurAuthentifie(session): AdministrateurAuthentifie,
     Json(requete): Json<InscriptionRequest>,
-) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
+) -> Result<(StatusCode, ReponseJson<UtilisateurPublic>), AppError> {
     let utilisateur = state.auth_service.creer_utilisateur(requete).await?;
     tracing::info!(
         admin = %session.pseudo,
         cible = %utilisateur.id,
         "compte créé par un administrateur"
     );
-    Ok(ReponseJson(utilisateur))
+    Ok((StatusCode::CREATED, ReponseJson(utilisateur)))
 }
 
 /// GET /api/users/:id — retourne un compte précis (admin uniquement).

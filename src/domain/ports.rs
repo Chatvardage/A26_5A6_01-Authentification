@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::utilisateur::{Role, Utilisateur};
+use super::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[async_trait]
 pub trait UtilisateurRepositoryPort: Send + Sync {
@@ -37,6 +37,18 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     ) -> Result<Option<Utilisateur>, RepoError>;
 
     async fn lister(&self, limite: i64, decalage: i64) -> Result<Vec<Utilisateur>, RepoError>;
+
+    /// Retourne le sous-ensemble `{id, pseudo}` des comptes qui existent
+    /// parmi `ids` (voir `GET /api/users/lookup`, docs/API.md). Un id sans
+    /// compte correspondant est silencieusement omis du résultat — ce
+    /// n'est ni une erreur ni un `RepoError`, l'appelant HTTP traite une
+    /// entrée manquante comme "utilisateur inconnu". `ids` est déjà
+    /// validé, non vide et borné en taille par l'appelant (voir
+    /// `interface::http::utilisateurs_controller::rechercher`).
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError>;
 
     /// Modifie un ou plusieurs champs d'un compte existant. Chaque
     /// paramètre `None` laisse la valeur actuelle inchangée (équivalent

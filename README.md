@@ -443,6 +443,7 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | GET | `/api/auth/me` | oui | Utilisateur courant |
 | PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/courriel/mot de passe) |
 | DELETE | `/api/auth/me` | oui | Supprimer son propre compte |
+| GET | `/api/users/lookup` | oui (tout utilisateur, pas seulement admin) | Résoudre `{id -> pseudo}` en lot pour d'autres comptes |
 | GET | `/api/users` | admin | Lister les comptes |
 | POST | `/api/users` | admin | Créer un compte |
 | GET | `/api/users/:id` | admin | Consulter un compte |

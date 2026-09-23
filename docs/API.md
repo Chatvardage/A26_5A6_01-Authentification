@@ -34,6 +34,7 @@ finalement distinguer les deux.
 | Créer un compte (inscription) | ✅ (le sien, `/register`) | ✅ (le sien, `/register`) |
 | Lire son propre profil | ✅ `GET /api/auth/me` | ✅ `GET /api/auth/me` |
 | Lire le profil d'un autre utilisateur | ❌ | ✅ `GET /api/users/{id}` |
+| Résoudre `{id -> pseudo}` pour d'autres comptes (info publique seulement) | ✅ `GET /api/users/lookup` | ✅ `GET /api/users/lookup` |
 | Lister jusqu'à 100 comptes récents | ❌ | ✅ `GET /api/users` |
 | Créer un compte | ❌ | ✅ `POST /api/users` |
 | Modifier son propre profil (pseudo/courriel/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
@@ -262,11 +263,53 @@ mot de passe actuel incorrect).
 ## Gestion des utilisateurs — panneau d'administration (`/api/users`)
 
 Réservé aux comptes `admin` : gestion de **n'importe quel** compte, pas
-seulement le sien (voir [Permissions](#permissions--qui-peut-faire-quoi)).
+seulement le sien (voir [Permissions](#permissions--qui-peut-faire-quoi))
+— **à l'exception de `GET /api/users/lookup` ci-dessous**, ouverte à tout
+utilisateur authentifié.
 
 Les contrôles d'autorisation ont priorité sur la validation du corps :
 une requête sans droits suffisants reçoit `403`, même si son JSON est
 invalide.
+
+### GET /api/users/lookup 🔒
+
+Résolution en lot `{id -> pseudo}` — **accessible à tout utilisateur
+authentifié**, contrairement aux autres routes `/api/users/*` ci-dessous
+(pas besoin du rôle `admin`). Pensée pour les autres microservices/le
+Frontend (Electron), qui ne connaissent un utilisateur que par son id
+opaque (membre d'un salon, expéditeur d'un message privé) et ont besoin
+d'afficher son pseudo sans avoir accès au panneau d'administration.
+
+**Paramètre de requête**
+
+| Paramètre | Règle |
+|-----------|-------|
+| `ids` | requis, liste d'UUID séparés par des virgules (`?ids=id1,id2,id3`), 1 à 100 entrées, aucune entrée vide |
+
+**Réponse `200`** : tableau d'objets `{ id, pseudo }` — **uniquement ces
+deux champs**, jamais `courriel`, `role` ni les horodatages (contrairement
+à `GET /api/users/{id}` ci-dessous, réservée aux admins et qui retourne le
+compte complet). Un id de `ids` qui ne correspond à aucun compte est
+simplement **omis** du tableau retourné — ce n'est pas une erreur, et la
+réponse reste `200` même si aucun id ne correspond à un compte existant
+(tableau vide). C'est au client (ex. le Frontend) de traiter un id absent
+du tableau comme "utilisateur inconnu".
+
+```json
+[
+  { "id": "b3f1...", "pseudo": "alice" },
+  { "id": "7ac0...", "pseudo": "bob" }
+]
+```
+
+**Erreurs** : `400` si `ids` est absent, vide, contient une entrée vide
+(virgule superflue), dépasse 100 entrées, ou contient une entrée qui n'est
+pas un UUID valide — dans ce dernier cas, la requête entière est rejetée
+(choix assumé : plus simple et plus prévisible pour l'appelant que
+d'ignorer silencieusement les entrées malformées et de ne renvoyer que les
+autres) ; `401` (jeton manquant, invalide ou expiré).
+
+---
 
 ### GET /api/users 🔒👑
 

@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
-use crate::domain::utilisateur::{Role, Utilisateur};
+use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[derive(Default)]
 pub struct FakeUtilisateurRepository {
@@ -133,6 +133,23 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             .into_iter()
             .skip(decalage as usize)
             .take(limite as usize)
+            .collect())
+    }
+
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        let utilisateurs = self.utilisateurs.read().await;
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                utilisateurs.get(id).map(|u| UtilisateurLookupPublic {
+                    id: u.id,
+                    pseudo: u.pseudo.clone(),
+                })
+            })
             .collect())
     }
 
@@ -372,6 +389,10 @@ mod tests {
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(
+            repo.rechercher_par_ids(&[Uuid::new_v4()]).await,
+            Err(RepoError::Interne(_))
+        ));
+        assert!(matches!(
             repo.modifier(Uuid::new_v4(), Some("x"), None, None).await,
             Err(RepoError::Interne(_))
         ));
@@ -402,6 +423,34 @@ mod tests {
         repo.provoquer_erreur_interne(false);
         assert!(repo.lister(100, 0).await.is_ok());
         assert!(repo.verifier_sante().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_omet_les_ids_inexistants() {
+        let repo = FakeUtilisateurRepository::new();
+        let alice = repo
+            .creer("alice", "alice@example.com", "hash")
+            .await
+            .unwrap();
+        let bob = repo.creer("bob", "bob@example.com", "hash").await.unwrap();
+        let id_inconnu = Uuid::new_v4();
+
+        let resultat = repo
+            .rechercher_par_ids(&[alice.id, id_inconnu, bob.id])
+            .await
+            .unwrap();
+
+        assert_eq!(resultat.len(), 2);
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == alice.id && u.pseudo == "alice"));
+        assert!(resultat.iter().any(|u| u.id == bob.id && u.pseudo == "bob"));
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_liste_vide_retourne_vecteur_vide() {
+        let repo = FakeUtilisateurRepository::new();
+        assert!(repo.rechercher_par_ids(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -46,6 +46,16 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
             "/",
             get(utilisateurs_controller::lister).post(utilisateurs_controller::creer),
         )
+        // Déclarée avant `/:id` : un segment statique (`lookup`) a
+        // priorité sur un paramètre nommé dans le routeur d'axum (basé sur
+        // `matchit`), donc l'ordre n'a pas d'incidence fonctionnelle ici —
+        // mais la garder avant `/:id` documente l'intention et évite toute
+        // ambiguïté de lecture avec la route d'administration ci-dessous.
+        // Contrairement aux autres routes `/api/users/*`, celle-ci utilise
+        // `UtilisateurAuthentifie` (voir utilisateurs_controller::rechercher),
+        // pas un extracteur admin : n'importe quel utilisateur connecté
+        // peut résoudre `{id -> pseudo}` pour d'autres comptes.
+        .route("/lookup", get(utilisateurs_controller::rechercher))
         .route(
             "/:id",
             get(utilisateurs_controller::obtenir)
@@ -1765,6 +1775,238 @@ mod tests {
             &format!("/api/users/{id_cible}/role"),
             Some(&jeton_admin),
             Some(json!({ "role": "admin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    // --- GET /api/users/lookup ------------------------------------------
+    //
+    // Contrairement au reste de `/api/users`, cette route n'exige qu'une
+    // authentification valide (`UtilisateurAuthentifie`), pas le rôle
+    // admin — voir `utilisateurs_controller::rechercher` et docs/API.md.
+
+    #[tokio::test]
+    async fn lookup_resout_un_seul_id_pour_un_utilisateur_non_admin() {
+        let ctx = nouveau_contexte();
+        let (id_alice, jeton_alice) =
+            inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={id_alice}"),
+            Some(&jeton_alice),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        let tableau = corps.as_array().unwrap();
+        assert_eq!(tableau.len(), 1);
+        assert_eq!(tableau[0]["id"], id_alice.to_string());
+        assert_eq!(tableau[0]["pseudo"], "alice");
+        // Rien d'autre que id/pseudo : ni courriel, ni role, ni horodatages.
+        assert_eq!(
+            tableau[0].as_object().unwrap().keys().collect::<Vec<_>>().len(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_resout_plusieurs_ids_et_omet_les_ids_inconnus() {
+        let ctx = nouveau_contexte();
+        let (id_alice, jeton_alice) =
+            inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (id_bob, _) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+        let id_inconnu = Uuid::new_v4();
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={id_alice},{id_inconnu},{id_bob}"),
+            Some(&jeton_alice),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        let tableau = corps.as_array().unwrap();
+        // L'id inconnu est omis (pas une erreur, pas de 404 partiel).
+        assert_eq!(tableau.len(), 2);
+        let pseudos: Vec<&str> = tableau
+            .iter()
+            .map(|u| u["pseudo"].as_str().unwrap())
+            .collect();
+        assert!(pseudos.contains(&"alice"));
+        assert!(pseudos.contains(&"bob"));
+    }
+
+    #[tokio::test]
+    async fn lookup_aucun_id_connu_retourne_un_tableau_vide() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={}", Uuid::new_v4()),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps.as_array().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn lookup_sans_jeton_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={}", Uuid::new_v4()),
+            None,
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn lookup_sans_parametre_ids_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) =
+            requete(&ctx.app, "GET", "/api/users/lookup", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "le paramètre 'ids' est requis et ne peut pas être vide"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_avec_parametre_ids_vide_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            "/api/users/lookup?ids=",
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "le paramètre 'ids' est requis et ne peut pas être vide"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_avec_une_virgule_superflue_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (id_alice, jeton) =
+            inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={id_alice},"),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert!(corps["erreur"]
+            .as_str()
+            .unwrap()
+            .contains("valeur vide"));
+    }
+
+    #[tokio::test]
+    async fn lookup_avec_un_id_malforme_rejette_toute_la_requete() {
+        let ctx = nouveau_contexte();
+        let (id_alice, jeton) =
+            inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        // Un seul id invalide dans la liste doit rejeter toute la requête
+        // (choix documenté dans docs/API.md et utilisateurs_controller::parser_ids),
+        // pas seulement ignorer cette entrée.
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={id_alice},pas-un-uuid"),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "'pas-un-uuid' dans le paramètre 'ids' n'est pas un UUID valide"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_avec_trop_dids_est_refuse() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+
+        let trop_dids = (0..101)
+            .map(|_| Uuid::new_v4().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={trop_dids}"),
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
+        assert_eq!(
+            corps["erreur"],
+            "le paramètre 'ids' accepte au plus 100 identifiants"
+        );
+    }
+
+    #[tokio::test]
+    async fn lookup_accepte_des_espaces_autour_des_virgules() {
+        let ctx = nouveau_contexte();
+        let (id_alice, jeton_alice) =
+            inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (id_bob, _) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+
+        // Espaces encodés en `%20` : un `http::Uri` brut n'accepte pas
+        // d'espace non encodé dans la chaîne de requête.
+        let (statut, corps) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids=%20{id_alice}%20,%20{id_bob}%20"),
+            Some(&jeton_alice),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps.as_array().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn lookup_avec_erreur_de_stockage_retourne_500() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        ctx.depot_concret.provoquer_erreur_interne(true);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "GET",
+            &format!("/api/users/lookup?ids={}", Uuid::new_v4()),
+            Some(&jeton),
+            None,
         )
         .await;
         assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);

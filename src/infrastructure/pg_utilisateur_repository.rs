@@ -12,7 +12,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
-use crate::domain::utilisateur::{Role, Utilisateur};
+use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[derive(Clone)]
 pub struct PgUtilisateurRepository {
@@ -85,6 +85,26 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         )
         .bind(limite)
         .bind(decalage)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)
+    }
+
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        // `= ANY($1)` avec un tableau lié plutôt qu'un `IN (...)` construit
+        // dynamiquement : un seul paramètre lié (pas d'injection SQL
+        // possible via la taille de la liste) et sqlx sait encoder
+        // `&[Uuid]` comme un tableau PostgreSQL natif. Ne sélectionne que
+        // `id`/`pseudo` (pas `SELECT *`) : cette route est accessible à
+        // tout utilisateur authentifié, `mot_de_passe_hache` ne doit même
+        // pas transiter en mémoire ici.
+        sqlx::query_as::<_, UtilisateurLookupPublic>(
+            "SELECT id, pseudo FROM utilisateurs WHERE id = ANY($1)",
+        )
+        .bind(ids)
         .fetch_all(&self.pool)
         .await
         .map_err(mapper_erreur_sql)
@@ -391,6 +411,45 @@ mod tests {
         assert!(tous.iter().any(|u| u.id == cree.id));
 
         repo.supprimer(cree.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_omet_les_ids_inexistants_et_respecte_lordre_de_la_base() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo_a = identifiant_unique("look-a");
+        let a = repo
+            .creer(&pseudo_a, &format!("{pseudo_a}@example.com"), "hash")
+            .await
+            .unwrap();
+        let pseudo_b = identifiant_unique("look-b");
+        let b = repo
+            .creer(&pseudo_b, &format!("{pseudo_b}@example.com"), "hash")
+            .await
+            .unwrap();
+        let id_inconnu = Uuid::new_v4();
+
+        let resultat = repo
+            .rechercher_par_ids(&[a.id, id_inconnu, b.id])
+            .await
+            .unwrap();
+
+        assert_eq!(resultat.len(), 2);
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == a.id && u.pseudo == pseudo_a));
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == b.id && u.pseudo == pseudo_b));
+        assert!(!resultat.iter().any(|u| u.id == id_inconnu));
+
+        repo.supprimer(a.id).await.unwrap();
+        repo.supprimer(b.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_liste_vide_retourne_vecteur_vide() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        assert!(repo.rechercher_par_ids(&[]).await.unwrap().is_empty());
     }
 
     #[tokio::test]

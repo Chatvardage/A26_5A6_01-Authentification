@@ -356,11 +356,13 @@ Résumé :
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton en heures (défaut : 24h, doit être comprise entre 1 et 720 — 30 jours). Le rôle et l'existence de l'utilisateur sont revérifiés en base à chaque route protégée, donc une durée élevée ne conserve pas les droits d'un compte supprimé ou rétrogradé. |
 | `PORT` | Port HTTP du service et du mapping du Compose autonome (défaut : `3001`). Avec `PORT=3099`, l'API est exposée sur `http://localhost:3099` et son healthcheck interroge ce même port. |
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
+| `SERVICES_COMPTE_SUPPRIME_URLS` | URL de base des services à prévenir d'une suppression de compte, séparées par des virgules (ex. `http://room-service:3003,http://message-service:3004,http://user-config-service:3005`). Absente : aucun service prévenu (avertissement journalisé à chaque suppression). |
+| `INTERNAL_SERVICE_TOKEN` | Secret partagé entre microservices, envoyé dans `x-internal-token` à ces services. Même valeur que dans l'Infra. |
 | `CORS_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
 
 ### En production (`NODE_ENV=production`)
 
-Même variable que les services Node. Le service **refuse de démarrer** si `JWT_SECRET` vaut la valeur de développement de l'Infra (`dev_secret_change_me_before_prod`, qui fait pourtant 32 caractères et passerait la règle de longueur) ou si le mot de passe de `DATABASE_URL` est une valeur de développement (`chatvardage`, `auth_service_dev`, `postgres`) — voir `config.rs`, `problemes_secrets_production`. En développement, rien ne change.
+Même variable que les services Node. Le service **refuse de démarrer** si `JWT_SECRET` vaut la valeur de développement de l'Infra (`dev_secret_change_me_before_prod`, qui fait pourtant 32 caractères et passerait la règle de longueur) ou si le mot de passe de `DATABASE_URL` est une valeur de développement (`chatvardage`, `auth_service_dev`, `postgres`) — voir `config.rs`, `problemes_secrets_production`. Si `SERVICES_COMPTE_SUPPRIME_URLS` est renseignée, `INTERNAL_SERVICE_TOKEN` doit aussi être présent, d'au moins 32 caractères et différent de la valeur de développement (`chatvardage_internal_dev`). En développement, rien ne change.
 
 ## Vérifier que ça fonctionne
 
@@ -446,7 +448,8 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | POST | `/api/auth/login` | non | Se connecter (courriel ou pseudo) |
 | GET | `/api/auth/me` | oui | Utilisateur courant |
 | PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/mot de passe ; le courriel n'est pas modifiable) |
-| DELETE | `/api/auth/me` | oui | Supprimer son propre compte |
+| DELETE | `/api/auth/me` | oui | Supprimer son propre compte (les autres services sont prévenus) |
+| POST | `/api/auth/logout-all` | oui | Se déconnecter partout (invalide tous ses jetons) |
 | GET | `/api/users/lookup` | oui (tout utilisateur, pas seulement admin) | Résoudre `{id -> pseudo}` en lot pour d'autres comptes |
 | GET | `/api/users` | admin | Lister les comptes |
 | POST | `/api/users` | admin | Créer un compte |

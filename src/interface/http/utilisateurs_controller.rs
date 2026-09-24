@@ -230,6 +230,7 @@ pub async fn supprimer(
 
     if supprime {
         tracing::info!(admin = %session.pseudo, cible = %id, "compte supprimé par un administrateur");
+        state.notificateur_suppression.compte_supprime(id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::Introuvable("utilisateur introuvable".into()))

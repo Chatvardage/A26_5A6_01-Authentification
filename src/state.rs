@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use crate::application::auth_service::AuthService;
-use crate::domain::ports::UtilisateurRepositoryPort;
+use crate::domain::ports::{NotificateurSuppressionPort, UtilisateurRepositoryPort};
 use crate::infrastructure::jwt::JwtService;
 
 #[derive(Clone)]
@@ -17,4 +17,7 @@ pub struct AppState {
     /// dépendent que du trait, jamais de PostgreSQL directement.
     pub depot_utilisateurs: Arc<dyn UtilisateurRepositoryPort>,
     pub jwt_service: Arc<JwtService>,
+    /// Prévient les autres services d'une suppression de compte (voir
+    /// `infrastructure::notificateur_suppression`).
+    pub notificateur_suppression: Arc<dyn NotificateurSuppressionPort>,
 }

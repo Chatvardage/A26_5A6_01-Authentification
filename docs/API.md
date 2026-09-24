@@ -264,6 +264,30 @@ un compte. Le client HTTP doit transmettre ce corps JSON avec sa requête
 (jeton manquant, invalide, expiré, associé à un compte déjà supprimé, ou
 mot de passe actuel incorrect).
 
+**Données des autres services** : après une suppression réussie, le
+service prévient en tâche de fond chaque service de
+`SERVICES_COMPTE_SUPPRIME_URLS` (`DELETE {url}/api/internal/users/{id}`,
+en-tête `x-internal-token` = `INTERNAL_SERVICE_TOKEN`, 3 essais). Room-Service
+supprime ses serveurs et ses adhésions, Message-Service ses messages,
+User-Config-Service sa configuration. La réponse n'attend pas ces appels ;
+un échec définitif est journalisé (les routes sont idempotentes et peuvent
+être rejouées).
+
+---
+
+### POST /api/auth/logout-all 🔒
+
+« Se déconnecter partout » : invalide **tous** les jetons déjà émis pour
+ce compte, sur tous les appareils, celui de la requête compris
+(`version_auth` incrémentée, comme lors d'un changement de mot de passe).
+Il faut ensuite se reconnecter. Les autres services s'en aperçoivent au
+plus tard après leur cache de validation (`AUTH_CACHE_TTL_MS`, 10 s par
+défaut) ; les sockets ouverts de Message-Service sont fermés à leur
+revalidation suivante (60 s au plus).
+
+Sans corps. **Réponse `204`**. **Erreurs** : `401` (jeton manquant,
+invalide ou déjà invalidé).
+
 ---
 
 ## Gestion des utilisateurs — panneau d'administration (`/api/users`)
@@ -424,6 +448,8 @@ route.
 
 **Erreurs** : `403` si l'id est celui de l'admin connecté, `404` si l'id
 n'existe pas.
+
+Les autres services sont prévenus comme pour `DELETE /api/auth/me`.
 
 ---
 

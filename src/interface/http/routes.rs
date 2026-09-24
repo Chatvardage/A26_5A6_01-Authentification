@@ -34,6 +34,7 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
         .route("/login", post(auth_controller::login))
+        .route("/logout-all", post(auth_controller::deconnexion_partout))
         .route(
             "/me",
             get(auth_controller::me)
@@ -182,6 +183,7 @@ mod tests {
     use crate::domain::utilisateur::Role;
     use crate::infrastructure::fake_utilisateur_repository::FakeUtilisateurRepository;
     use crate::infrastructure::jwt::{Claims, JwtService};
+    use crate::infrastructure::notificateur_suppression::NotificateurEnregistreur;
 
     /// Environnement de test : garde une référence concrète au dépôt
     /// (`depot_concret`) en plus de celle (dynamique) injectée dans
@@ -193,6 +195,8 @@ mod tests {
         app: Router,
         depot_concret: Arc<FakeUtilisateurRepository>,
         secret: String,
+        /// Comptes signalés supprimés aux autres services.
+        notificateur: Arc<NotificateurEnregistreur>,
     }
 
     fn nouveau_contexte() -> Contexte {
@@ -210,15 +214,18 @@ mod tests {
         let secret = "secret-de-test".to_string();
         let jwt_service = Arc::new(JwtService::new(secret.clone(), 24));
         let auth_service = AuthService::new(depot.clone(), jwt_service.clone());
+        let notificateur = Arc::new(NotificateurEnregistreur::default());
         let state = AppState {
             auth_service,
             depot_utilisateurs: depot,
             jwt_service,
+            notificateur_suppression: notificateur.clone(),
         };
         Contexte {
             app: construire(state, None),
             depot_concret,
             secret,
+            notificateur,
         }
     }
 
@@ -381,6 +388,7 @@ mod tests {
             auth_service,
             depot_utilisateurs: depot,
             jwt_service,
+            notificateur_suppression: Arc::new(NotificateurEnregistreur::default()),
         };
         let origines = vec!["http://exemple-autorise.test".to_string()];
         let app = construire(state, Some(&origines));
@@ -429,6 +437,7 @@ mod tests {
             auth_service,
             depot_utilisateurs: depot,
             jwt_service,
+            notificateur_suppression: Arc::new(NotificateurEnregistreur::default()),
         };
         // Un caractère de contrôle (retour à la ligne) ne parse jamais en
         // `HeaderValue` valide — simule une faute de frappe dans
@@ -468,6 +477,7 @@ mod tests {
             auth_service,
             depot_utilisateurs: depot,
             jwt_service,
+            notificateur_suppression: Arc::new(NotificateurEnregistreur::default()),
         };
         construire(state, Some(origines))
     }
@@ -1231,7 +1241,7 @@ mod tests {
     #[tokio::test]
     async fn supprimer_moi_deux_fois_refuse_la_seconde_fois() {
         let ctx = nouveau_contexte();
-        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
 
         let (statut, _) = requete(
             &ctx.app,
@@ -1242,6 +1252,8 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
+        // Les autres services sont prévenus, une seule fois.
+        assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -1634,6 +1646,7 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
+        assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id_alice]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -1644,6 +1657,82 @@ mod tests {
         )
         .await;
         assert_eq!(statut, StatusCode::NOT_FOUND);
+        // Rien de supprimé : personne n'est prévenu une seconde fois.
+        assert_eq!(ctx.notificateur.ids.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn suppression_refusee_ne_previent_personne() {
+        let ctx = nouveau_contexte();
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "DELETE",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "mot_de_passe_actuel": "mauvais-mot-de-passe" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+        assert!(ctx.notificateur.ids.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deconnexion_partout_invalide_tous_les_jetons() {
+        let ctx = nouveau_contexte();
+        let (_, jeton_a) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        let (statut, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        let jeton_b = corps["jeton"].as_str().unwrap().to_string();
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/logout-all",
+            Some(&jeton_a),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+
+        for jeton in [&jeton_a, &jeton_b] {
+            let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(jeton), None).await;
+            assert_eq!(statut, StatusCode::UNAUTHORIZED);
+        }
+
+        // Une nouvelle connexion redonne un jeton valide.
+        let (_, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        let jeton_c = corps["jeton"].as_str().unwrap();
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(jeton_c), None).await;
+        assert_eq!(statut, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn deconnexion_partout_exige_un_jeton_et_gere_une_erreur_de_stockage() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "POST", "/api/auth/logout-all", None, None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // L'authentification lit le dépôt une fois ; l'invalidation échoue.
+        ctx.depot_concret.provoquer_erreur_interne_apres(1);
+        let (statut, _) =
+            requete(&ctx.app, "POST", "/api/auth/logout-all", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]

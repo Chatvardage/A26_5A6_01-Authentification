@@ -182,6 +182,17 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         Ok(resultat.rows_affected() > 0)
     }
 
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError> {
+        let resultat = sqlx::query(
+            "UPDATE utilisateurs SET version_auth = version_auth + 1, modifie_le = now() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)?;
+        Ok(resultat.rows_affected() > 0)
+    }
+
     async fn modifier_si_mot_de_passe_inchange(
         &self,
         id: Uuid,
@@ -628,6 +639,23 @@ mod tests {
 
         repo.supprimer(a.id).await.unwrap();
         repo.supprimer(b.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalider_sessions_incremente_version_auth() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("henri");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+
+        assert!(repo.invalider_sessions(cree.id).await.unwrap());
+        let relu = repo.trouver_par_id(cree.id).await.unwrap().unwrap();
+        assert_eq!(relu.version_auth, cree.version_auth + 1);
+
+        assert!(!repo.invalider_sessions(Uuid::new_v4()).await.unwrap());
+        repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]

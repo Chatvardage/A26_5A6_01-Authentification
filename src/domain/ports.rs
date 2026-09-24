@@ -92,6 +92,11 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
 
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError>;
 
+    /// Incrémente `version_auth` : tous les jetons déjà émis pour ce compte
+    /// deviennent invalides (« se déconnecter partout »). Faux si le compte
+    /// n'existe pas.
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError>;
+
     /// Variante de `supprimer` protégée contre la même course que
     /// `modifier_si_mot_de_passe_inchange`.
     async fn supprimer_si_mot_de_passe_inchange(
@@ -122,6 +127,14 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
 /// Résultat explicite d'une tentative de changement de rôle. Sépare une
 /// cible absente d'une cible admin, sans faire deviner la raison au
 /// contrôleur à partir d'un `Option`.
+/// Prévient les autres microservices qu'un compte a été supprimé, pour
+/// qu'ils effacent les données qui le concernent (serveurs possédés,
+/// messages, configuration). « Tire et oublie » : la suppression du compte
+/// ne dépend jamais de leur disponibilité.
+pub trait NotificateurSuppressionPort: Send + Sync {
+    fn compte_supprime(&self, id: Uuid);
+}
+
 pub enum ResultatChangementRole {
     Modifie(Utilisateur),
     CibleAdmin,

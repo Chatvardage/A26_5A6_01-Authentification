@@ -37,6 +37,7 @@ const JWT_DUREE_MAX_HEURES: i64 = 720; // 30 jours
 /// même variable que les services Node) : un déploiement qui oublierait de
 /// les remplacer signerait ses jetons avec une clé publique dans le dépôt.
 const SECRETS_JWT_DE_DEVELOPPEMENT: &[&str] = &["dev_secret_change_me_before_prod"];
+const JETONS_INTERNES_DE_DEVELOPPEMENT: &[&str] = &["chatvardage_internal_dev"];
 const MOTS_DE_PASSE_BDD_DE_DEVELOPPEMENT: &[&str] =
     &["chatvardage", "auth_service_dev", "postgres"];
 
@@ -49,6 +50,11 @@ pub struct Config {
     /// `None` ou une liste vide n'autorise aucune origine : l'infrastructure
     /// doit fournir `CORS_ORIGINS` explicitement.
     pub cors_allowed_origins: Option<Vec<String>>,
+    /// URL de base des services à prévenir d'une suppression de compte
+    /// (`SERVICES_COMPTE_SUPPRIME_URLS`, séparées par des virgules).
+    pub services_compte_supprime: Vec<String>,
+    /// Secret partagé entre microservices (`INTERNAL_SERVICE_TOKEN`).
+    pub jeton_interne: Option<String>,
 }
 
 impl Config {
@@ -84,8 +90,22 @@ impl Config {
             .filter(|url| !url.trim().is_empty())
             .expect("DATABASE_URL doit être définie et non vide (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock");
 
+        let services_compte_supprime: Vec<String> = std::env::var("SERVICES_COMPTE_SUPPRIME_URLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .collect();
+        let jeton_interne = std::env::var("INTERNAL_SERVICE_TOKEN")
+            .ok()
+            .map(|jeton| jeton.trim().to_string())
+            .filter(|jeton| !jeton.is_empty());
+
         if est_production() {
-            let problemes = problemes_secrets_production(&jwt_secret, &database_url);
+            let mut problemes = problemes_secrets_production(&jwt_secret, &database_url);
+            if !services_compte_supprime.is_empty() {
+                problemes.extend(probleme_jeton_interne(jeton_interne.as_deref()));
+            }
             assert!(
                 problemes.is_empty(),
                 "Secrets de développement refusés en production (NODE_ENV=production) : {}",
@@ -104,6 +124,8 @@ impl Config {
                     .filter(|origine| !origine.is_empty())
                     .collect()
             }),
+            services_compte_supprime,
+            jeton_interne,
         }
     }
 }
@@ -138,6 +160,21 @@ fn problemes_secrets_production(jwt_secret: &str, database_url: &str) -> Vec<Str
         }
     }
     problemes
+}
+
+/// Jeton interne en production, s'il sert (services à prévenir) : même
+/// règle que les services Node (`src/partage/secrets-production.ts`).
+fn probleme_jeton_interne(jeton: Option<&str>) -> Option<String> {
+    match jeton {
+        None => Some("INTERNAL_SERVICE_TOKEN est absent".to_string()),
+        Some(jeton) if JETONS_INTERNES_DE_DEVELOPPEMENT.contains(&jeton) => {
+            Some("INTERNAL_SERVICE_TOKEN vaut une valeur de développement connue".to_string())
+        }
+        Some(jeton) if jeton.len() < LONGUEUR_MIN_JWT_SECRET => Some(format!(
+            "INTERNAL_SERVICE_TOKEN doit contenir au moins {LONGUEUR_MIN_JWT_SECRET} caractères"
+        )),
+        Some(_) => None,
+    }
 }
 
 /// Charge les variables du fichier `.env` lorsqu'il existe. Cette étape

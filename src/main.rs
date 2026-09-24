@@ -18,7 +18,10 @@ use std::sync::Arc;
 
 use config::Config;
 use domain::ports::UtilisateurRepositoryPort;
-use infrastructure::{db, jwt::JwtService, pg_utilisateur_repository::PgUtilisateurRepository};
+use infrastructure::{
+    db, jwt::JwtService, notificateur_suppression::HttpNotificateurSuppression,
+    pg_utilisateur_repository::PgUtilisateurRepository,
+};
 use state::AppState;
 
 #[tokio::main]
@@ -56,6 +59,10 @@ async fn main() {
         auth_service,
         depot_utilisateurs,
         jwt_service,
+        notificateur_suppression: Arc::new(HttpNotificateurSuppression::new(
+            config.services_compte_supprime.clone(),
+            config.jeton_interne.clone(),
+        )),
     };
 
     let app = interface::http::routes::construire(state, config.cors_allowed_origins.as_deref());

@@ -8,4 +8,5 @@ pub mod db;
 pub mod fake_utilisateur_repository;
 pub mod jwt;
 pub mod mot_de_passe;
+pub mod notificateur_suppression;
 pub mod pg_utilisateur_repository;

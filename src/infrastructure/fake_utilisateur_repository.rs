@@ -256,6 +256,17 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         Ok(self.utilisateurs.write().await.remove(&id).is_some())
     }
 
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        Ok(match self.utilisateurs.write().await.get_mut(&id) {
+            Some(utilisateur) => {
+                utilisateur.version_auth += 1;
+                true
+            }
+            None => false,
+        })
+    }
+
     async fn modifier_si_mot_de_passe_inchange(
         &self,
         id: Uuid,

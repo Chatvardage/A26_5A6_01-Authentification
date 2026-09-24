@@ -43,6 +43,7 @@ Le service doit conserver la responsabilité de :
 - créer, lire, modifier et supprimer des utilisateurs;
 - protéger la sécurité des routes;
 - permettre à un admin connecté de lire, créer, modifier et supprimer des utilisateurs;
+- prévenir Room-Service, Message-Service et User-Config-Service d'une suppression de compte (`infrastructure::notificateur_suppression`, port `NotificateurSuppressionPort`), après **chaque** suppression réussie, qu'elle vienne de `DELETE /api/auth/me` ou de `DELETE /api/users/:id`;
 - gestion des rôles.
 
 Ne pas déplacer ici les responsabilités des autres microservices.

@@ -64,5 +64,29 @@ pub async fn supprimer_moi(
         .auth_service
         .supprimer_compte(session.id_utilisateur, requete)
         .await?;
+    state
+        .notificateur_suppression
+        .compte_supprime(session.id_utilisateur);
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /api/auth/logout-all — invalide tous les jetons de l'utilisateur,
+/// sur tous ses appareils (celui de la requête compris). Les autres
+/// services le constatent au plus tard après leur cache de validation
+/// (`AUTH_CACHE_TTL_MS`).
+pub async fn deconnexion_partout(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+) -> Result<StatusCode, AppError> {
+    let invalide = state
+        .depot_utilisateurs
+        .invalider_sessions(session.id_utilisateur)
+        .await
+        .map_err(|e| AppError::Interne(e.to_string()))?;
+    if invalide {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        // Supprimé entre la validation du jeton et cet appel.
+        Err(AppError::NonAutorise("jeton invalide ou expiré".into()))
+    }
 }

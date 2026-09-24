@@ -29,7 +29,7 @@ const LIMITE_CORPS_REQUETE_OCTETS: usize = 16 * 1024;
 /// `origines_autorisees` : liste blanche CORS. Une variable absente, vide
 /// ou invalide ne permet aucune origine : l'infrastructure doit fournir
 /// explicitement les origines de l'application Electron et du panneau
-/// d'administration via `CORS_ALLOWED_ORIGINS` (voir `config.rs`).
+/// d'administration via `CORS_ORIGINS` (voir `config.rs`).
 pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Router {
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
@@ -77,13 +77,13 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
     };
     let cors = match origines_autorisees {
         None => {
-            tracing::warn!("CORS_ALLOWED_ORIGINS est absente — aucune origine n'est autorisée");
+            tracing::warn!("CORS_ORIGINS est absente — aucune origine n'est autorisée");
             cors_restreint()
         }
         Some([]) => {
             tracing::warn!(
-                "CORS_ALLOWED_ORIGINS est définie mais ne contient aucune origine (ex. \
-                 \"CORS_ALLOWED_ORIGINS=,,,\") — aucune origine n'est autorisée"
+                "CORS_ORIGINS est définie mais ne contient aucune origine (ex. \
+                 \"CORS_ORIGINS=,,,\") — aucune origine n'est autorisée"
             );
             cors_restreint()
         }
@@ -96,17 +96,14 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
                 .filter_map(|o| match o.parse() {
                     Ok(valeur) => Some(valeur),
                     Err(_) => {
-                        tracing::warn!(
-                            origine = o,
-                            "CORS_ALLOWED_ORIGINS: origine invalide, ignorée"
-                        );
+                        tracing::warn!(origine = o, "CORS_ORIGINS: origine invalide, ignorée");
                         None
                     }
                 })
                 .collect();
             if valeurs.is_empty() {
                 tracing::warn!(
-                    "CORS_ALLOWED_ORIGINS: aucune origine valide après filtrage — aucune \
+                    "CORS_ORIGINS: aucune origine valide après filtrage — aucune \
                      origine n'est autorisée"
                 );
                 cors_restreint()
@@ -435,7 +432,7 @@ mod tests {
         };
         // Un caractère de contrôle (retour à la ligne) ne parse jamais en
         // `HeaderValue` valide — simule une faute de frappe dans
-        // `CORS_ALLOWED_ORIGINS` (voir le `tracing::warn!` dans `construire`).
+        // `CORS_ORIGINS` (voir le `tracing::warn!` dans `construire`).
         let origines = vec![
             "http://exemple-autorise.test".to_string(),
             "origine\ninvalide".to_string(),
@@ -502,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn cors_refuse_toute_origine_si_la_liste_est_vide_apres_nettoyage() {
-        // Simule `CORS_ALLOWED_ORIGINS=,,,` : `config.rs` filtre déjà les
+        // Simule `CORS_ORIGINS=,,,` : `config.rs` filtre déjà les
         // entrées vides, donnant `Some(vec![])` — distinct de `None`
         // (variable absente). Les deux doivent refuser toute origine.
         let app = app_avec_origines(&[]);

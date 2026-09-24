@@ -273,8 +273,8 @@ docker compose up --build
 ```
 
 Pour appeler l'API depuis un navigateur, renseigner
-`CORS_ALLOWED_ORIGINS` dans `.env` avant le démarrage (par exemple
-`CORS_ALLOWED_ORIGINS=http://localhost:5173`). Sans cette liste blanche,
+`CORS_ORIGINS` dans `.env` avant le démarrage (par exemple
+`CORS_ORIGINS=http://localhost:5173`). Sans cette liste blanche,
 le service refuse les requêtes cross-origin.
 
 Ce `docker-compose.yml` sert à développer/tester **ce service seul**, avec
@@ -356,7 +356,7 @@ Résumé :
 | `JWT_DUREE_DE_VIE_HEURES` | Durée de validité d'un jeton en heures (défaut : 24h, doit être comprise entre 1 et 720 — 30 jours). Le rôle et l'existence de l'utilisateur sont revérifiés en base à chaque route protégée, donc une durée élevée ne conserve pas les droits d'un compte supprimé ou rétrogradé. |
 | `PORT` | Port HTTP du service et du mapping du Compose autonome (défaut : `3001`). Avec `PORT=3099`, l'API est exposée sur `http://localhost:3099` et son healthcheck interroge ce même port. |
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
-| `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
+| `CORS_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
 
 ### En production (`NODE_ENV=production`)
 

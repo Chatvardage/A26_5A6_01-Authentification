@@ -205,7 +205,7 @@ auth-service:
     JWT_SECRET: ${JWT_SECRET}
     JWT_DUREE_DE_VIE_HEURES: 24
     PORT: 3001
-    CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+    CORS_ORIGINS: ${CORS_ORIGINS}
   depends_on:
     postgres:
       condition: service_healthy

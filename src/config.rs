@@ -47,7 +47,7 @@ pub struct Config {
     pub port: u16,
     /// Liste blanche CORS (voir `interface::http::routes::construire`).
     /// `None` ou une liste vide n'autorise aucune origine : l'infrastructure
-    /// doit fournir `CORS_ALLOWED_ORIGINS` explicitement.
+    /// doit fournir `CORS_ORIGINS` explicitement.
     pub cors_allowed_origins: Option<Vec<String>>,
 }
 
@@ -98,7 +98,7 @@ impl Config {
             jwt_secret,
             jwt_duree_de_vie_heures,
             port: lire_var_numerique("PORT", 3001u16),
-            cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS").ok().map(|v| {
+            cors_allowed_origins: std::env::var("CORS_ORIGINS").ok().map(|v| {
                 v.split(',')
                     .map(|origine| origine.trim().to_string())
                     .filter(|origine| !origine.is_empty())
@@ -510,7 +510,7 @@ mod tests {
             &[
                 ("DATABASE_URL", Some("postgres://x/y")),
                 ("JWT_SECRET", Some(SECRET_VALIDE)),
-                ("CORS_ALLOWED_ORIGINS", None),
+                ("CORS_ORIGINS", None),
             ],
             || {
                 let config = Config::depuis_variables_environnement();
@@ -525,10 +525,7 @@ mod tests {
             &[
                 ("DATABASE_URL", Some("postgres://x/y")),
                 ("JWT_SECRET", Some(SECRET_VALIDE)),
-                (
-                    "CORS_ALLOWED_ORIGINS",
-                    Some("http://a.test, http://b.test ,, "),
-                ),
+                ("CORS_ORIGINS", Some("http://a.test, http://b.test ,, ")),
             ],
             || {
                 let config = Config::depuis_variables_environnement();

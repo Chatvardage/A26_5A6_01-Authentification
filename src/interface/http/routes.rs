@@ -1577,6 +1577,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn changer_role_avec_erreur_de_stockage_sur_la_cible_retourne_500() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (id_alice, _) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // 1er appel : session de l'admin ; 2e : chargement de la cible.
+        ctx.depot_concret.provoquer_erreur_interne_apres(1);
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "moderateur" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
     async fn admin_supprime_un_compte_et_change_un_role() {
         let ctx = nouveau_contexte();
         let (id_admin, _) =

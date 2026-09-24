@@ -10,7 +10,7 @@
 //! base, dans `pg_utilisateur_repository.rs`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -28,6 +28,10 @@ pub struct FakeUtilisateurRepository {
     /// tester la branche 500 de chaque contrôleur sans dépendre d'une
     /// vraie panne PostgreSQL.
     provoque_erreur: AtomicBool,
+    /// Variante de `provoque_erreur` qui laisse d'abord passer quelques
+    /// appels (voir `provoquer_erreur_interne_apres`) : 0 = désactivé,
+    /// sinon nombre d'appels encore acceptés + 1.
+    appels_avant_erreur: AtomicUsize,
     /// Simule une suppression concurrente entre le chargement de la cible
     /// par l'extracteur et la mutation atomique du rôle.
     supprimer_avant_changement_role: AtomicBool,
@@ -46,6 +50,13 @@ impl FakeUtilisateurRepository {
 
     pub fn provoquer_erreur_interne(&self, valeur: bool) {
         self.provoque_erreur.store(valeur, Ordering::SeqCst);
+    }
+
+    /// Laisse passer `appels` appels, puis bascule tous les suivants en
+    /// `RepoError::Interne` — pour atteindre une erreur de stockage située
+    /// après l'authentification (qui lit déjà le dépôt).
+    pub fn provoquer_erreur_interne_apres(&self, appels: usize) {
+        self.appels_avant_erreur.store(appels + 1, Ordering::SeqCst);
     }
 
     pub fn provoquer_suppression_avant_changement_role(&self) {
@@ -75,7 +86,11 @@ impl FakeUtilisateurRepository {
     }
 
     fn verifier_erreur_provoquee(&self) -> Result<(), RepoError> {
-        if self.provoque_erreur.load(Ordering::SeqCst) {
+        let restants = self.appels_avant_erreur.load(Ordering::SeqCst);
+        if restants > 1 {
+            self.appels_avant_erreur.fetch_sub(1, Ordering::SeqCst);
+        }
+        if self.provoque_erreur.load(Ordering::SeqCst) || restants == 1 {
             Err(RepoError::Interne("erreur simulée pour les tests".into()))
         } else {
             Ok(())

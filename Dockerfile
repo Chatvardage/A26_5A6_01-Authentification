@@ -36,7 +36,7 @@ RUN touch src/main.rs && cargo build --release
 # Étape séparée du build Rust : le cache Docker ne réinstalle les
 # dépendances npm que si package.json/package-lock.json changent, pas à
 # chaque modification du code Rust.
-FROM node:20.19.1-bookworm-slim AS node-deps
+FROM node:22-bookworm-slim AS node-deps
 
 WORKDIR /app
 
@@ -59,7 +59,7 @@ RUN DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
 # Basée sur Node.js (pas une image Debian minimale) : le conteneur doit
 # exécuter `npx prisma migrate deploy` au démarrage, avant de lancer le
 # binaire Rust compilé à l'étape 1.
-FROM node:20.19.1-bookworm-slim
+FROM node:22-bookworm-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -74,7 +74,7 @@ COPY package.json ./
 COPY prisma ./prisma
 
 # Ne pas tourner en root dans le conteneur final (principe du moindre
-# privilège) : `node:20-bookworm-slim` fournit déjà un utilisateur non
+# privilège) : `node:22-bookworm-slim` fournit déjà un utilisateur non
 # privilégié prêt à l'emploi (uid 1000), inutile d'en créer un autre.
 # `chown` après les `COPY` ci-dessus : `node` doit pouvoir lire/exécuter
 # le binaire et lire `node_modules/`/`prisma/` (aucune écriture requise

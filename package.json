@@ -9,9 +9,12 @@
     "prisma:migrate:deploy": "prisma migrate deploy"
   },
   "devDependencies": {
-    "prisma": "5.20.0"
+    "prisma": "6.19.3"
   },
   "dependencies": {
-    "@prisma/client": "5.20.0"
+    "@prisma/client": "6.19.3"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

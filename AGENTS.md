@@ -168,8 +168,8 @@ Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microserv
 Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
 
 1. **`builder`** (`rust:1.88.0-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
-2. **`node-deps`** (`node:20.19.1-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
-3. **Image finale** (`node:20.19.1-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
+2. **`node-deps`** (`node:22-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:22-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
 4. **`CMD`** : `npx prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
 
 Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.

@@ -56,5 +56,9 @@ model Utilisateur {
   cree_le            DateTime @default(now()) @db.Timestamptz
   modifie_le         DateTime @default(now()) @db.Timestamptz
 
+  // Créé par la migration `index_utilisateurs_cree_le` (GET /api/users trie
+  // par cree_le DESC) : déclaré ici pour que Prisma ne propose pas de le
+  // supprimer.
+  @@index([cree_le(sort: Desc)], map: "utilisateurs_cree_le_idx")
   @@map("utilisateurs")
 }

@@ -47,7 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings

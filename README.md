@@ -358,6 +358,10 @@ Résumé :
 | `RUST_LOG` | Niveau de journalisation (`tracing-subscriber`) — `error`/`warn`/`info`/`debug`/`trace` (défaut : `info`) |
 | `CORS_ALLOWED_ORIGINS` | Liste blanche CORS, origines séparées par des virgules (ex. `http://localhost:5173,https://admin.exemple.com`). Absente, vide ou invalide : aucune origine n'est autorisée. L'infrastructure doit fournir les origines réellement utilisées par l'application Electron et le panneau d'administration. |
 
+### En production (`NODE_ENV=production`)
+
+Même variable que les services Node. Le service **refuse de démarrer** si `JWT_SECRET` vaut la valeur de développement de l'Infra (`dev_secret_change_me_before_prod`, qui fait pourtant 32 caractères et passerait la règle de longueur) ou si le mot de passe de `DATABASE_URL` est une valeur de développement (`chatvardage`, `auth_service_dev`, `postgres`) — voir `config.rs`, `problemes_secrets_production`. En développement, rien ne change.
+
 ## Vérifier que ça fonctionne
 
 Dans le Compose autonome, `DATABASE_URL_DOCKER` est l'URI complète utilisée
@@ -441,7 +445,7 @@ Documentation complète (requêtes, réponses, codes d'erreur) dans
 | POST | `/api/auth/register` | non | Créer un compte |
 | POST | `/api/auth/login` | non | Se connecter (courriel ou pseudo) |
 | GET | `/api/auth/me` | oui | Utilisateur courant |
-| PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/courriel/mot de passe) |
+| PATCH | `/api/auth/me` | oui | Modifier son propre profil (pseudo/mot de passe ; le courriel n'est pas modifiable) |
 | DELETE | `/api/auth/me` | oui | Supprimer son propre compte |
 | GET | `/api/users/lookup` | oui (tout utilisateur, pas seulement admin) | Résoudre `{id -> pseudo}` en lot pour d'autres comptes |
 | GET | `/api/users` | admin | Lister les comptes |

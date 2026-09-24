@@ -1,0 +1,57 @@
+name: CI
+
+# Formatage, lint (clippy), compilation et tests à chaque PR et sur les
+# branches principales. Les tests de pg_utilisateur_repository exigent une
+# vraie base PostgreSQL migrée (pas de mode mock, voir README « Lancer les
+# tests ») : on en démarre une comme service du job.
+
+on:
+  pull_request:
+  push:
+    branches: [main, develop]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth
+
+jobs:
+  lint-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: chatvardage
+          POSTGRES_PASSWORD: chatvardage
+          POSTGRES_DB: chatvardage_auth
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chatvardage -d chatvardage_auth"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      # Migrations Prisma (seul outil de schéma du service) avant les tests.
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      - run: cargo test

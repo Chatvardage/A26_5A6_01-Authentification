@@ -111,13 +111,18 @@ pub struct ChangerRoleRequest {
     pub role: Role,
 }
 
-/// `PATCH /api/auth/me` : modification de son propre compte. Tous les
-/// champs sont optionnels (au moins un requis, vérifié dans
-/// `AuthService::modifier_profil`, pas exprimable avec `validator` seul).
+/// `PATCH /api/auth/me` : modification de son propre compte (pseudo et/ou
+/// mot de passe). Tous les champs sont optionnels (au moins un requis,
+/// vérifié dans `AuthService::modifier_profil`, pas exprimable avec
+/// `validator` seul). Le courriel n'est PAS modifiable par l'utilisateur
+/// lui-même (décision produit) : `deny_unknown_fields` fait refuser (400)
+/// une requête qui en contiendrait un, plutôt que de l'ignorer en silence.
+/// Seul un administrateur peut le changer (`PATCH /api/users/{id}`).
 /// Note : `validator` valide correctement `Option<String>`, y compris
 /// pour un validateur `custom` comme `valider_pseudo` (`None` est
 /// toujours considéré valide, seul un `Some` est déballé puis vérifié).
 #[derive(Debug, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
 pub struct ModifierProfilRequest {
     #[validate(
         length(
@@ -131,11 +136,6 @@ pub struct ModifierProfilRequest {
         )
     )]
     pub pseudo: Option<String>,
-    #[validate(
-        email(message = "adresse courriel invalide"),
-        length(max = "LONGUEUR_MAX_COURRIEL", message = "courriel trop long")
-    )]
-    pub courriel: Option<String>,
     #[validate(length(
         min = 8,
         max = "LONGUEUR_MAX_MOT_DE_PASSE",
@@ -143,9 +143,8 @@ pub struct ModifierProfilRequest {
     ))]
     pub mot_de_passe: Option<String>,
     /// Requis (vérifié dans `AuthService::modifier_profil`, pas
-    /// exprimable avec `validator` seul) dès que `courriel` et/ou
-    /// `mot_de_passe` sont modifiés — jamais pour un changement de
-    /// `pseudo` seul. Empêche qu'un jeton volé/intercepté (fenêtre
+    /// exprimable avec `validator` seul) dès que `mot_de_passe` est
+    /// modifié — jamais pour un changement de `pseudo` seul. Empêche qu'un jeton volé/intercepté (fenêtre
     /// d'exploitation limitée à son expiration) ne se transforme en
     /// prise de contrôle permanente du compte (changement du mot de
     /// passe ou du courriel sans reconfirmer le mot de passe actuel) —

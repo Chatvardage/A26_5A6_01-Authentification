@@ -3,10 +3,11 @@
 //! utilisateurs inscrits", "Supprimer un utilisateur") — chaque handler
 //! admin vérifie `exiger_admin` avant de faire quoi que ce soit.
 //!
-//! Exception : `GET /api/users/lookup` (voir `rechercher` plus bas), qui
-//! n'exige qu'une authentification valide (`UtilisateurAuthentifie`), pas
-//! le rôle admin — c'est une résolution `{id -> pseudo}` volontairement
-//! ouverte à tout utilisateur connecté (voir docs/API.md).
+//! Exceptions : `GET /api/users/lookup` (voir `rechercher` plus bas) et
+//! `GET /api/users/search` (voir `rechercher_par_pseudo`), qui n'exigent
+//! qu'une authentification valide (`UtilisateurAuthentifie`), pas le rôle
+//! admin — résolution `{id -> pseudo}` et recherche par début de pseudo,
+//! volontairement ouvertes à tout utilisateur connecté (voir docs/API.md).
 
 use axum::{extract::State, http::StatusCode, Json as ReponseJson};
 use serde::Deserialize;
@@ -36,6 +37,56 @@ const LOOKUP_MAX_IDS: usize = 100;
 #[derive(Debug, Deserialize)]
 pub struct RechercherQuery {
     pub ids: Option<String>,
+}
+
+/// Longueur maximale du texte de `GET /api/users/search` : celle d'un
+/// pseudo (voir `application::dto`), au-delà rien ne peut correspondre.
+const RECHERCHE_LONGUEUR_MAX: usize = 20;
+const RECHERCHE_LIMITE_DEFAUT: i64 = 20;
+const RECHERCHE_LIMITE_MAX: i64 = 50;
+
+#[derive(Debug, Deserialize)]
+pub struct RechercherParPseudoQuery {
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+}
+
+/// GET /api/users/search?q=texte&limit=n — comptes dont le pseudo commence
+/// par `q` (insensible à la casse), `{id, pseudo}` seulement. Comme
+/// `/lookup`, ouverte à tout utilisateur authentifié : c'est ce qui permet
+/// au Frontend de trouver quelqu'un à qui écrire en message privé sans
+/// annuaire complet des comptes (voir docs/API.md). L'appelant n'est pas
+/// exclu des résultats : c'est au client de le retirer s'il le souhaite.
+pub async fn rechercher_par_pseudo(
+    State(state): State<AppState>,
+    _utilisateur: UtilisateurAuthentifie,
+    Query(requete): Query<RechercherParPseudoQuery>,
+) -> Result<ReponseJson<Vec<UtilisateurLookupPublic>>, AppError> {
+    let texte = requete.q.as_deref().unwrap_or("").trim();
+    if texte.is_empty() {
+        return Err(AppError::Requete(
+            "le paramètre 'q' est requis et ne peut pas être vide".into(),
+        ));
+    }
+    if texte.chars().count() > RECHERCHE_LONGUEUR_MAX {
+        return Err(AppError::Requete(format!(
+            "le paramètre 'q' accepte au plus {RECHERCHE_LONGUEUR_MAX} caractères"
+        )));
+    }
+    let limite = requete.limit.unwrap_or(RECHERCHE_LIMITE_DEFAUT);
+    if !(1..=RECHERCHE_LIMITE_MAX).contains(&limite) {
+        return Err(AppError::Requete(format!(
+            "le paramètre 'limit' doit être compris entre 1 et {RECHERCHE_LIMITE_MAX}"
+        )));
+    }
+
+    let utilisateurs = state
+        .depot_utilisateurs
+        .rechercher_par_pseudo(texte, limite)
+        .await
+        .map_err(|e| AppError::Interne(e.to_string()))?;
+
+    Ok(ReponseJson(utilisateurs))
 }
 
 /// GET /api/users/lookup?ids=id1,id2,... — résolution en lot
@@ -90,7 +141,9 @@ fn parser_ids(ids_brut: Option<&str>) -> Result<Vec<Uuid>, AppError> {
         .into_iter()
         .map(|s| {
             Uuid::parse_str(s).map_err(|_| {
-                AppError::Requete(format!("'{s}' dans le paramètre 'ids' n'est pas un UUID valide"))
+                AppError::Requete(format!(
+                    "'{s}' dans le paramètre 'ids' n'est pas un UUID valide"
+                ))
             })
         })
         .collect()

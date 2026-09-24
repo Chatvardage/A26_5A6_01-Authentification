@@ -35,9 +35,10 @@ finalement distinguer les deux.
 | Lire son propre profil | ✅ `GET /api/auth/me` | ✅ `GET /api/auth/me` |
 | Lire le profil d'un autre utilisateur | ❌ | ✅ `GET /api/users/{id}` |
 | Résoudre `{id -> pseudo}` pour d'autres comptes (info publique seulement) | ✅ `GET /api/users/lookup` | ✅ `GET /api/users/lookup` |
+| Chercher des comptes par début de pseudo (info publique seulement) | ✅ `GET /api/users/search` | ✅ `GET /api/users/search` |
 | Lister jusqu'à 100 comptes récents | ❌ | ✅ `GET /api/users` |
 | Créer un compte | ❌ | ✅ `POST /api/users` |
-| Modifier son propre profil (pseudo/courriel/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
+| Modifier son propre profil (pseudo/mot de passe) | ✅ `PATCH /api/auth/me` | ✅ `PATCH /api/auth/me` |
 | Modifier le profil d'un autre utilisateur | ❌ | ✅ `PATCH /api/users/{id}` |
 | Changer le rôle d'un compte | ❌ (pas même le sien) | ✅ `PATCH /api/users/{id}/role` |
 | Supprimer son propre compte | ✅ `DELETE /api/auth/me` | ✅ `DELETE /api/auth/me` |
@@ -198,24 +199,30 @@ compte supprimé).
 
 ### PATCH /api/auth/me 🔒
 
-Modifie son **propre** compte (pseudo, courriel et/ou mot de passe).
+Modifie son **propre** compte (pseudo et/ou mot de passe).
+
+🚫 **Le courriel n'est pas modifiable par l'utilisateur lui-même** : tout
+champ inconnu, dont `courriel`, est refusé (`400`) plutôt qu'ignoré. Seul
+un administrateur peut changer le courriel d'un compte
+(`PATCH /api/users/{id}`, voir plus bas).
 Accessible à tous les rôles — un utilisateur ou modérateur peut ainsi
 mettre à jour son profil sans passer par un admin. Ne permet pas de
 changer son propre rôle (voir `PATCH /api/users/{id}/role`, réservé aux
 admins).
 
-⚠️ **`mot_de_passe_actuel` est requis dès que `courriel` et/ou
-`mot_de_passe` sont fournis** (pas pour un changement de `pseudo` seul) :
-sans cette confirmation, un jeton volé suffirait à changer le mot de
-passe ou le courriel du compte et à en prendre le contrôle de façon
-permanente, bien après l'expiration normale du jeton.
+⚠️ **`mot_de_passe_actuel` est requis dès que `mot_de_passe` est
+fourni** (pas pour un changement de `pseudo` seul) : sans cette
+confirmation, un jeton volé suffirait à changer le mot de passe du compte
+et à en prendre le contrôle de façon permanente, bien après l'expiration
+normale du jeton. Un changement de mot de passe révoque **tous** les
+jetons existants du compte (`version_auth`), y compris celui de l'appel :
+le client doit se reconnecter (`POST /api/auth/login`) pour continuer.
 
 **Corps de la requête** (tous les champs optionnels, au moins un requis)
 
 ```json
 {
   "pseudo": "alice2",
-  "courriel": "alice2@example.com",
   "mot_de_passe": "nouveaumotdepasse123",
   "mot_de_passe_actuel": "motdepasse123"
 }
@@ -224,13 +231,12 @@ permanente, bien après l'expiration normale du jeton.
 | Champ | Règle |
 |-------|-------|
 | pseudo | optionnel, 3 à 20 caractères si fourni, uniquement lettres/chiffres ASCII, `_` et `-` |
-| courriel | optionnel, format courriel valide et 254 caractères maximum si fourni ; normalisé en minuscules |
 | mot_de_passe | optionnel, 8 à 128 caractères si fourni (rehaché avec Argon2) |
-| mot_de_passe_actuel | requis si `courriel` et/ou `mot_de_passe` sont fournis (ignoré sinon), 1 à 128 caractères |
+| mot_de_passe_actuel | requis si `mot_de_passe` est fourni (ignoré sinon), 1 à 128 caractères |
 
 **Réponse `200`** : l'objet utilisateur mis à jour (même forme que `GET /api/auth/me`).
 
-**Erreurs** : `400` (validation, aucun champ fourni, ou `mot_de_passe_actuel` manquant alors que `courriel`/`mot_de_passe` sont fournis), `401` (jeton manquant, invalide, expiré, associé à un compte supprimé, ou `mot_de_passe_actuel` incorrect), `404` si le compte est supprimé concurremment après l'authentification, `409` (pseudo ou courriel déjà pris par un autre compte).
+**Erreurs** : `400` (validation, aucun champ fourni, champ inconnu comme `courriel`, ou `mot_de_passe_actuel` manquant alors que `mot_de_passe` est fourni), `401` (jeton manquant, invalide, expiré, révoqué, associé à un compte supprimé, ou `mot_de_passe_actuel` incorrect), `404` si le compte est supprimé concurremment après l'authentification, `409` (pseudo déjà pris par un autre compte).
 
 ---
 
@@ -264,8 +270,8 @@ mot de passe actuel incorrect).
 
 Réservé aux comptes `admin` : gestion de **n'importe quel** compte, pas
 seulement le sien (voir [Permissions](#permissions--qui-peut-faire-quoi))
-— **à l'exception de `GET /api/users/lookup` ci-dessous**, ouverte à tout
-utilisateur authentifié.
+— **à l'exception de `GET /api/users/lookup` et `GET /api/users/search`
+ci-dessous**, ouvertes à tout utilisateur authentifié.
 
 Les contrôles d'autorisation ont priorité sur la validation du corps :
 une requête sans droits suffisants reçoit `403`, même si son JSON est
@@ -308,6 +314,38 @@ pas un UUID valide — dans ce dernier cas, la requête entière est rejetée
 (choix assumé : plus simple et plus prévisible pour l'appelant que
 d'ignorer silencieusement les entrées malformées et de ne renvoyer que les
 autres) ; `401` (jeton manquant, invalide ou expiré).
+
+---
+
+### GET /api/users/search 🔒
+
+Recherche de comptes **par début de pseudo** — **accessible à tout
+utilisateur authentifié**, comme `/lookup`. Permet au Frontend de trouver
+quelqu'un à qui écrire (message privé) sans exposer d'annuaire complet des
+inscrits : il faut connaître au moins le début d'un pseudo.
+
+**Paramètres de requête**
+
+| Paramètre | Règle |
+|-----------|-------|
+| `q` | requis, 1 à 20 caractères après retrait des espaces autour ; comparé **sans tenir compte de la casse** au début du pseudo ; `%`, `_` et `\` sont pris littéralement (pas de jokers) |
+| `limit` | optionnel, entier de 1 à 50, défaut 20 |
+
+**Réponse `200`** : tableau `{ id, pseudo }` (mêmes deux champs que
+`/lookup`, jamais `courriel` ni `role`), trié par pseudo, au plus `limit`
+entrées ; tableau vide si rien ne correspond. L'appelant **n'est pas
+exclu** des résultats : c'est au client de le retirer s'il le souhaite.
+
+```json
+[
+  { "id": "b3f1...", "pseudo": "alice" },
+  { "id": "7ac0...", "pseudo": "Alicia" }
+]
+```
+
+**Erreurs** : `400` si `q` est absent, vide ou trop long, ou si `limit`
+n'est pas un entier entre 1 et 50 ; `401` (jeton manquant, invalide ou
+expiré).
 
 ---
 
@@ -361,9 +399,10 @@ contrôle ; seul le propriétaire du compte peut le faire, via `PATCH
 { "pseudo": "alice2", "courriel": "alice2@example.com" }
 ```
 
-Mêmes règles que `pseudo`/`courriel` sur `PATCH /api/auth/me` (voir plus
-haut) : pseudo 3-20 caractères sans `@`, courriel valide et 254
-caractères maximum (normalisé en minuscules).
+Pseudo : mêmes règles que sur `PATCH /api/auth/me` (3-20 caractères sans
+`@`). Courriel : format valide et 254 caractères maximum, normalisé en
+minuscules — cette route d'administration est la seule qui permette de
+changer un courriel.
 
 **Réponse `200`** : l'objet utilisateur mis à jour.
 

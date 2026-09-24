@@ -25,6 +25,19 @@ impl PgUtilisateurRepository {
     }
 }
 
+/// Échappe les caractères spéciaux de `LIKE` (`\\`, `%`, `_`) pour qu'ils
+/// soient comparés littéralement (clause `ESCAPE '\\'`).
+fn echapper_like(texte: &str) -> String {
+    let mut resultat = String::with_capacity(texte.len());
+    for caractere in texte.chars() {
+        if matches!(caractere, '\\' | '%' | '_') {
+            resultat.push('\\');
+        }
+        resultat.push(caractere);
+    }
+    resultat
+}
+
 #[async_trait]
 impl UtilisateurRepositoryPort for PgUtilisateurRepository {
     async fn creer(
@@ -105,6 +118,28 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             "SELECT id, pseudo FROM utilisateurs WHERE id = ANY($1)",
         )
         .bind(ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)
+    }
+
+    async fn rechercher_par_pseudo(
+        &self,
+        prefixe: &str,
+        limite: i64,
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        // `%`, `_` et `\` du texte saisi sont échappés : sans ça, chercher
+        // "a_" ou "%" se comporterait comme un joker LIKE. Même restriction
+        // aux seules colonnes id/pseudo que `rechercher_par_ids`.
+        let motif = format!("{}%", echapper_like(&prefixe.to_lowercase()));
+        sqlx::query_as::<_, UtilisateurLookupPublic>(
+            "SELECT id, pseudo FROM utilisateurs \
+             WHERE LOWER(pseudo) LIKE $1 ESCAPE '\\' \
+             ORDER BY LOWER(pseudo), pseudo \
+             LIMIT $2",
+        )
+        .bind(motif)
+        .bind(limite)
         .fetch_all(&self.pool)
         .await
         .map_err(mapper_erreur_sql)
@@ -450,6 +485,49 @@ mod tests {
     async fn rechercher_par_ids_liste_vide_retourne_vecteur_vide() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         assert!(repo.rechercher_par_ids(&[]).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn echapper_like_neutralise_les_jokers() {
+        assert_eq!(echapper_like("a_b%c\\d"), "a\\_b\\%c\\\\d");
+        assert_eq!(echapper_like("alice"), "alice");
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_pseudo_prefixe_insensible_a_la_casse_et_litteral() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        // Préfixe unique pour ne pas dépendre des autres comptes de la base.
+        let base = identifiant_unique("Srch");
+        let pseudo_a = format!("{base}_a");
+        let pseudo_b = format!("{base}xb");
+        let a = repo
+            .creer(&pseudo_a, &format!("{pseudo_a}@example.com"), "hash")
+            .await
+            .unwrap();
+        let b = repo
+            .creer(&pseudo_b, &format!("{pseudo_b}@example.com"), "hash")
+            .await
+            .unwrap();
+
+        let tous = repo
+            .rechercher_par_pseudo(&base.to_uppercase(), 50)
+            .await
+            .unwrap();
+        assert_eq!(tous.len(), 2);
+
+        // `_` est littéral : "<base>_" ne doit PAS correspondre à "<base>xb".
+        let litteral = repo
+            .rechercher_par_pseudo(&format!("{base}_"), 50)
+            .await
+            .unwrap();
+        assert_eq!(litteral.len(), 1);
+        assert_eq!(litteral[0].id, a.id);
+
+        let limite = repo.rechercher_par_pseudo(&base, 1).await.unwrap();
+        assert_eq!(limite.len(), 1);
+
+        repo.supprimer(a.id).await.unwrap();
+        repo.supprimer(b.id).await.unwrap();
     }
 
     #[tokio::test]

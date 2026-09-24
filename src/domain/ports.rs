@@ -50,6 +50,19 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
         ids: &[Uuid],
     ) -> Result<Vec<UtilisateurLookupPublic>, RepoError>;
 
+    /// Retourne au plus `limite` comptes `{id, pseudo}` dont le pseudo
+    /// commence par `prefixe`, sans tenir compte de la casse, triés par
+    /// pseudo (voir `GET /api/users/search`, docs/API.md). `prefixe` est
+    /// déjà nettoyé, non vide et borné par l'appelant (voir
+    /// `interface::http::utilisateurs_controller::rechercher_par_pseudo`) ;
+    /// ses caractères sont pris LITTÉRALEMENT (`%`/`_` ne sont pas des
+    /// jokers).
+    async fn rechercher_par_pseudo(
+        &self,
+        prefixe: &str,
+        limite: i64,
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError>;
+
     /// Modifie un ou plusieurs champs d'un compte existant. Chaque
     /// paramètre `None` laisse la valeur actuelle inchangée (équivalent
     /// d'un `COALESCE` en SQL) — permet de réutiliser cette seule méthode

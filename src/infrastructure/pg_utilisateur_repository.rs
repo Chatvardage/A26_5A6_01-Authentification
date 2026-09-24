@@ -12,7 +12,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
-use crate::domain::utilisateur::{Role, Utilisateur};
+use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[derive(Clone)]
 pub struct PgUtilisateurRepository {
@@ -23,6 +23,19 @@ impl PgUtilisateurRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
     }
+}
+
+/// Échappe les caractères spéciaux de `LIKE` (`\\`, `%`, `_`) pour qu'ils
+/// soient comparés littéralement (clause `ESCAPE '\\'`).
+fn echapper_like(texte: &str) -> String {
+    let mut resultat = String::with_capacity(texte.len());
+    for caractere in texte.chars() {
+        if matches!(caractere, '\\' | '%' | '_') {
+            resultat.push('\\');
+        }
+        resultat.push(caractere);
+    }
+    resultat
 }
 
 #[async_trait]
@@ -90,6 +103,48 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         .map_err(mapper_erreur_sql)
     }
 
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        // `= ANY($1)` avec un tableau lié plutôt qu'un `IN (...)` construit
+        // dynamiquement : un seul paramètre lié (pas d'injection SQL
+        // possible via la taille de la liste) et sqlx sait encoder
+        // `&[Uuid]` comme un tableau PostgreSQL natif. Ne sélectionne que
+        // `id`/`pseudo` (pas `SELECT *`) : cette route est accessible à
+        // tout utilisateur authentifié, `mot_de_passe_hache` ne doit même
+        // pas transiter en mémoire ici.
+        sqlx::query_as::<_, UtilisateurLookupPublic>(
+            "SELECT id, pseudo FROM utilisateurs WHERE id = ANY($1)",
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)
+    }
+
+    async fn rechercher_par_pseudo(
+        &self,
+        prefixe: &str,
+        limite: i64,
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        // `%`, `_` et `\` du texte saisi sont échappés : sans ça, chercher
+        // "a_" ou "%" se comporterait comme un joker LIKE. Même restriction
+        // aux seules colonnes id/pseudo que `rechercher_par_ids`.
+        let motif = format!("{}%", echapper_like(&prefixe.to_lowercase()));
+        sqlx::query_as::<_, UtilisateurLookupPublic>(
+            "SELECT id, pseudo FROM utilisateurs \
+             WHERE LOWER(pseudo) LIKE $1 ESCAPE '\\' \
+             ORDER BY LOWER(pseudo), pseudo \
+             LIMIT $2",
+        )
+        .bind(motif)
+        .bind(limite)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)
+    }
+
     async fn modifier(
         &self,
         id: Uuid,
@@ -124,6 +179,17 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
             .execute(&self.pool)
             .await
             .map_err(mapper_erreur_sql)?;
+        Ok(resultat.rows_affected() > 0)
+    }
+
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError> {
+        let resultat = sqlx::query(
+            "UPDATE utilisateurs SET version_auth = version_auth + 1, modifie_le = now() WHERE id = $1",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(mapper_erreur_sql)?;
         Ok(resultat.rows_affected() > 0)
     }
 
@@ -394,6 +460,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rechercher_par_ids_omet_les_ids_inexistants_et_respecte_lordre_de_la_base() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo_a = identifiant_unique("look-a");
+        let a = repo
+            .creer(&pseudo_a, &format!("{pseudo_a}@example.com"), "hash")
+            .await
+            .unwrap();
+        let pseudo_b = identifiant_unique("look-b");
+        let b = repo
+            .creer(&pseudo_b, &format!("{pseudo_b}@example.com"), "hash")
+            .await
+            .unwrap();
+        let id_inconnu = Uuid::new_v4();
+
+        let resultat = repo
+            .rechercher_par_ids(&[a.id, id_inconnu, b.id])
+            .await
+            .unwrap();
+
+        assert_eq!(resultat.len(), 2);
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == a.id && u.pseudo == pseudo_a));
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == b.id && u.pseudo == pseudo_b));
+        assert!(!resultat.iter().any(|u| u.id == id_inconnu));
+
+        repo.supprimer(a.id).await.unwrap();
+        repo.supprimer(b.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_liste_vide_retourne_vecteur_vide() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        assert!(repo.rechercher_par_ids(&[]).await.unwrap().is_empty());
+    }
+
+    #[test]
+    fn echapper_like_neutralise_les_jokers() {
+        assert_eq!(echapper_like("a_b%c\\d"), "a\\_b\\%c\\\\d");
+        assert_eq!(echapper_like("alice"), "alice");
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_pseudo_prefixe_insensible_a_la_casse_et_litteral() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        // Préfixe unique pour ne pas dépendre des autres comptes de la base.
+        let base = identifiant_unique("Srch");
+        let pseudo_a = format!("{base}_a");
+        let pseudo_b = format!("{base}xb");
+        let a = repo
+            .creer(&pseudo_a, &format!("{pseudo_a}@example.com"), "hash")
+            .await
+            .unwrap();
+        let b = repo
+            .creer(&pseudo_b, &format!("{pseudo_b}@example.com"), "hash")
+            .await
+            .unwrap();
+
+        let tous = repo
+            .rechercher_par_pseudo(&base.to_uppercase(), 50)
+            .await
+            .unwrap();
+        assert_eq!(tous.len(), 2);
+
+        // `_` est littéral : "<base>_" ne doit PAS correspondre à "<base>xb".
+        let litteral = repo
+            .rechercher_par_pseudo(&format!("{base}_"), 50)
+            .await
+            .unwrap();
+        assert_eq!(litteral.len(), 1);
+        assert_eq!(litteral[0].id, a.id);
+
+        let limite = repo.rechercher_par_pseudo(&base, 1).await.unwrap();
+        assert_eq!(limite.len(), 1);
+
+        repo.supprimer(a.id).await.unwrap();
+        repo.supprimer(b.id).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn modifier_met_a_jour_seulement_les_champs_fournis() {
         let repo = PgUtilisateurRepository::new(pool_de_test().await);
         let pseudo = identifiant_unique("dora");
@@ -491,6 +639,23 @@ mod tests {
 
         repo.supprimer(a.id).await.unwrap();
         repo.supprimer(b.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn invalider_sessions_incremente_version_auth() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("henri");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+
+        assert!(repo.invalider_sessions(cree.id).await.unwrap());
+        let relu = repo.trouver_par_id(cree.id).await.unwrap().unwrap();
+        assert_eq!(relu.version_auth, cree.version_auth + 1);
+
+        assert!(!repo.invalider_sessions(Uuid::new_v4()).await.unwrap());
+        repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]

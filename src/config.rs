@@ -31,6 +31,16 @@ const LONGUEUR_MIN_JWT_SECRET: usize = 32;
 const JWT_DUREE_MIN_HEURES: i64 = 1;
 const JWT_DUREE_MAX_HEURES: i64 = 720; // 30 jours
 
+/// Secrets et mots de passe de DÉVELOPPEMENT connus (valeurs par défaut de
+/// A26_5A6_01-Infra : `.env.example`, `docker-compose.yml`, et de ce dépôt).
+/// Acceptés en local, mais refusés en production (`NODE_ENV=production`,
+/// même variable que les services Node) : un déploiement qui oublierait de
+/// les remplacer signerait ses jetons avec une clé publique dans le dépôt.
+const SECRETS_JWT_DE_DEVELOPPEMENT: &[&str] = &["dev_secret_change_me_before_prod"];
+const JETONS_INTERNES_DE_DEVELOPPEMENT: &[&str] = &["chatvardage_internal_dev"];
+const MOTS_DE_PASSE_BDD_DE_DEVELOPPEMENT: &[&str] =
+    &["chatvardage", "auth_service_dev", "postgres"];
+
 pub struct Config {
     pub database_url: String,
     pub jwt_secret: String,
@@ -38,8 +48,13 @@ pub struct Config {
     pub port: u16,
     /// Liste blanche CORS (voir `interface::http::routes::construire`).
     /// `None` ou une liste vide n'autorise aucune origine : l'infrastructure
-    /// doit fournir `CORS_ALLOWED_ORIGINS` explicitement.
+    /// doit fournir `CORS_ORIGINS` explicitement.
     pub cors_allowed_origins: Option<Vec<String>>,
+    /// URL de base des services à prévenir d'une suppression de compte
+    /// (`SERVICES_COMPTE_SUPPRIME_URLS`, séparées par des virgules).
+    pub services_compte_supprime: Vec<String>,
+    /// Secret partagé entre microservices (`INTERNAL_SERVICE_TOKEN`).
+    pub jeton_interne: Option<String>,
 }
 
 impl Config {
@@ -70,21 +85,95 @@ impl Config {
              heures (voir .env.example), reçu {jwt_duree_de_vie_heures}"
         );
 
+        let database_url = std::env::var("DATABASE_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty())
+            .expect("DATABASE_URL doit être définie et non vide (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock");
+
+        let services_compte_supprime: Vec<String> = std::env::var("SERVICES_COMPTE_SUPPRIME_URLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(|url| url.trim().to_string())
+            .filter(|url| !url.is_empty())
+            .collect();
+        let jeton_interne = std::env::var("INTERNAL_SERVICE_TOKEN")
+            .ok()
+            .map(|jeton| jeton.trim().to_string())
+            .filter(|jeton| !jeton.is_empty());
+
+        if est_production() {
+            let mut problemes = problemes_secrets_production(&jwt_secret, &database_url);
+            if !services_compte_supprime.is_empty() {
+                problemes.extend(probleme_jeton_interne(jeton_interne.as_deref()));
+            }
+            assert!(
+                problemes.is_empty(),
+                "Secrets de développement refusés en production (NODE_ENV=production) : {}",
+                problemes.join(" ; ")
+            );
+        }
+
         Self {
-            database_url: std::env::var("DATABASE_URL")
-                .ok()
-                .filter(|url| !url.trim().is_empty())
-                .expect("DATABASE_URL doit être définie et non vide (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock"),
+            database_url,
             jwt_secret,
             jwt_duree_de_vie_heures,
             port: lire_var_numerique("PORT", 3001u16),
-            cors_allowed_origins: std::env::var("CORS_ALLOWED_ORIGINS").ok().map(|v| {
+            cors_allowed_origins: std::env::var("CORS_ORIGINS").ok().map(|v| {
                 v.split(',')
                     .map(|origine| origine.trim().to_string())
                     .filter(|origine| !origine.is_empty())
                     .collect()
             }),
+            services_compte_supprime,
+            jeton_interne,
         }
+    }
+}
+
+/// Vrai si le service tourne en production (`NODE_ENV=production`).
+fn est_production() -> bool {
+    std::env::var("NODE_ENV").is_ok_and(|valeur| valeur.trim() == "production")
+}
+
+/// Mot de passe d'une URL `postgres://utilisateur:mot_de_passe@hôte/...`,
+/// s'il y en a un.
+fn mot_de_passe_url(url: &str) -> Option<&str> {
+    let apres_schema = url.split_once("://")?.1;
+    let identifiants = apres_schema.rsplit_once('@')?.0;
+    identifiants
+        .split_once(':')
+        .map(|(_, mot_de_passe)| mot_de_passe)
+}
+
+/// Problèmes de secrets pour la production (vide = rien à signaler).
+fn problemes_secrets_production(jwt_secret: &str, database_url: &str) -> Vec<String> {
+    let mut problemes = Vec::new();
+    if SECRETS_JWT_DE_DEVELOPPEMENT.contains(&jwt_secret) {
+        problemes.push("JWT_SECRET vaut une valeur de développement connue".to_string());
+    }
+    if let Some(mot_de_passe) = mot_de_passe_url(database_url) {
+        if MOTS_DE_PASSE_BDD_DE_DEVELOPPEMENT.contains(&mot_de_passe) {
+            problemes.push(
+                "le mot de passe de DATABASE_URL est une valeur de développement connue"
+                    .to_string(),
+            );
+        }
+    }
+    problemes
+}
+
+/// Jeton interne en production, s'il sert (services à prévenir) : même
+/// règle que les services Node (`src/partage/secrets-production.ts`).
+fn probleme_jeton_interne(jeton: Option<&str>) -> Option<String> {
+    match jeton {
+        None => Some("INTERNAL_SERVICE_TOKEN est absent".to_string()),
+        Some(jeton) if JETONS_INTERNES_DE_DEVELOPPEMENT.contains(&jeton) => {
+            Some("INTERNAL_SERVICE_TOKEN vaut une valeur de développement connue".to_string())
+        }
+        Some(jeton) if jeton.len() < LONGUEUR_MIN_JWT_SECRET => Some(format!(
+            "INTERNAL_SERVICE_TOKEN doit contenir au moins {LONGUEUR_MIN_JWT_SECRET} caractères"
+        )),
+        Some(_) => None,
     }
 }
 
@@ -177,6 +266,92 @@ mod tests {
     /// restent un cas limite significatif, pas une valeur confortablement
     /// au-dessus du seuil qui ne le testerait pas vraiment.
     const SECRET_VALIDE: &str = "0123456789abcdef0123456789abcdef";
+
+    const SECRET_DE_DEV: &str = "dev_secret_change_me_before_prod";
+
+    #[test]
+    fn production_refuse_les_secrets_de_developpement() {
+        for (secret, url, attendu) in [
+            (
+                SECRET_DE_DEV,
+                "postgres://u:vrai-mot-de-passe@h/b",
+                "JWT_SECRET",
+            ),
+            (
+                SECRET_VALIDE,
+                "postgres://u:auth_service_dev@h/b",
+                "DATABASE_URL",
+            ),
+        ] {
+            let resultat = std::panic::catch_unwind(|| {
+                avec_env(
+                    &[
+                        ("NODE_ENV", Some("production")),
+                        ("DATABASE_URL", Some(url)),
+                        ("JWT_SECRET", Some(secret)),
+                        ("JWT_DUREE_DE_VIE_HEURES", None),
+                        ("PORT", None),
+                    ],
+                    || {
+                        Config::depuis_variables_environnement();
+                    },
+                )
+            });
+            let message = resultat
+                .expect_err("un secret de développement doit être refusé en production")
+                .downcast::<String>()
+                .map(|m| *m)
+                .unwrap_or_default();
+            assert!(message.contains("NODE_ENV=production"), "{message}");
+            assert!(message.contains(attendu), "{message}");
+        }
+    }
+
+    #[test]
+    fn production_accepte_des_secrets_propres_et_le_developpement_les_valeurs_par_defaut() {
+        // Production : secrets remplacés (et URL sans mot de passe, ex.
+        // authentification par socket) → démarre.
+        for url in [
+            "postgres://u:vrai-mot-de-passe@h/b",
+            "postgres://u@h/b",
+            "pas-une-url",
+        ] {
+            avec_env(
+                &[
+                    ("NODE_ENV", Some(" production ")),
+                    ("DATABASE_URL", Some(url)),
+                    ("JWT_SECRET", Some(SECRET_VALIDE)),
+                    ("JWT_DUREE_DE_VIE_HEURES", None),
+                    ("PORT", None),
+                ],
+                || {
+                    Config::depuis_variables_environnement();
+                },
+            );
+        }
+        // Développement : les valeurs par défaut de l'Infra restent acceptées.
+        avec_env(
+            &[
+                ("NODE_ENV", Some("development")),
+                ("DATABASE_URL", Some("postgres://u:auth_service_dev@h/b")),
+                ("JWT_SECRET", Some(SECRET_DE_DEV)),
+                ("JWT_DUREE_DE_VIE_HEURES", None),
+                ("PORT", None),
+            ],
+            || {
+                Config::depuis_variables_environnement();
+            },
+        );
+    }
+
+    #[test]
+    fn mot_de_passe_url_extrait_le_mot_de_passe() {
+        assert_eq!(mot_de_passe_url("postgres://u:p@h/b"), Some("p"));
+        assert_eq!(mot_de_passe_url("postgres://u:p:q@h/b"), Some("p:q"));
+        assert_eq!(mot_de_passe_url("postgres://u@h/b"), None);
+        assert_eq!(mot_de_passe_url("postgres://h/b"), None);
+        assert_eq!(mot_de_passe_url("sans-schema"), None);
+    }
 
     #[test]
     fn utilise_les_valeurs_par_defaut_si_absentes() {
@@ -372,7 +547,7 @@ mod tests {
             &[
                 ("DATABASE_URL", Some("postgres://x/y")),
                 ("JWT_SECRET", Some(SECRET_VALIDE)),
-                ("CORS_ALLOWED_ORIGINS", None),
+                ("CORS_ORIGINS", None),
             ],
             || {
                 let config = Config::depuis_variables_environnement();
@@ -387,10 +562,7 @@ mod tests {
             &[
                 ("DATABASE_URL", Some("postgres://x/y")),
                 ("JWT_SECRET", Some(SECRET_VALIDE)),
-                (
-                    "CORS_ALLOWED_ORIGINS",
-                    Some("http://a.test, http://b.test ,, "),
-                ),
+                ("CORS_ORIGINS", Some("http://a.test, http://b.test ,, ")),
             ],
             || {
                 let config = Config::depuis_variables_environnement();

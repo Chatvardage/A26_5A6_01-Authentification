@@ -25,7 +25,7 @@
 //! identique.
 
 use async_trait::async_trait;
-use axum::extract::rejection::{JsonRejection, PathRejection};
+use axum::extract::rejection::{JsonRejection, PathRejection, QueryRejection};
 use axum::extract::{FromRequest, FromRequestParts, Request};
 use axum::http::request::Parts;
 use axum::http::StatusCode;
@@ -96,4 +96,42 @@ fn mapper_rejet_path(rejet: PathRejection) -> AppError {
     // Axum retourne déjà 400 pour les erreurs de désérialisation des segments
     // d'URL; on conserve ce statut, mais pas son message technique.
     AppError::Extraction(rejet.status(), "paramètre d'URL invalide".into())
+}
+
+/// Équivalent de `Json`/`Path` ci-dessus pour la chaîne de requête
+/// (`?ids=...`) — utilisé par `GET /api/users/lookup` (voir
+/// `utilisateurs_controller::rechercher`). En pratique, les DTO de requête
+/// de ce service n'ont que des champs `String`/`Option<String>` (validés
+/// ensuite "à la main", voir `parser_ids`), donc cet extracteur échoue
+/// rarement — mais quand il échoue (ex. même clé répétée deux fois avec
+/// des types incompatibles), il doit renvoyer la même enveloppe
+/// `{ "erreur": ... }` que le reste de l'API plutôt que le texte brut par
+/// défaut d'axum.
+pub struct Query<T>(pub T);
+
+#[async_trait]
+impl<T, S> FromRequestParts<S> for Query<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::extract::Query::<T>::from_request_parts(parts, state).await {
+            Ok(axum::extract::Query(valeur)) => Ok(Query(valeur)),
+            Err(rejet) => Err(mapper_rejet_query(rejet)),
+        }
+    }
+}
+
+fn mapper_rejet_query(rejet: QueryRejection) -> AppError {
+    // Comme `mapper_rejet_json`/`mapper_rejet_path` : on ne renvoie jamais
+    // le message technique brut d'axum au client, mais on le journalise
+    // pour le débogage.
+    tracing::debug!(erreur = %rejet, "rejet d'extraction de la chaîne de requête");
+    AppError::Extraction(
+        StatusCode::BAD_REQUEST,
+        "paramètres de requête invalides".into(),
+    )
 }

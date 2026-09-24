@@ -123,6 +123,24 @@ impl From<Utilisateur> for UtilisateurPublic {
     }
 }
 
+/// Vue minimale utilisée par `GET /api/users/lookup` (voir
+/// `interface::http::utilisateurs_controller::rechercher`) : résolution en
+/// lot `{id -> pseudo}`, accessible à **n'importe quel** utilisateur
+/// authentifié, contrairement au reste de `/api/users` (réservé aux
+/// admins). Ne contient volontairement que l'id et le pseudo — jamais
+/// `courriel`, `role` ni les horodatages, qui ne sont pas des informations
+/// qu'un utilisateur devrait pouvoir apprendre sur un autre compte via
+/// cette route publique-mais-authentifiée. `sqlx::FromRow` permet à
+/// `PgUtilisateurRepository` de construire ce type directement à partir
+/// d'une requête `SELECT id, pseudo` restreinte (voir
+/// `pg_utilisateur_repository.rs`), sans jamais charger
+/// `mot_de_passe_hache` en mémoire pour cette route.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct UtilisateurLookupPublic {
+    pub id: Uuid,
+    pub pseudo: String,
+}
+
 // `cargo test` exécute ce module (compilé seulement en mode test grâce à
 // `#[cfg(test)]`). Aucune base de données requise ici : on teste la
 // logique pure de conversion du rôle.

@@ -17,7 +17,7 @@
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use super::utilisateur::{Role, Utilisateur};
+use super::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[async_trait]
 pub trait UtilisateurRepositoryPort: Send + Sync {
@@ -37,6 +37,31 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     ) -> Result<Option<Utilisateur>, RepoError>;
 
     async fn lister(&self, limite: i64, decalage: i64) -> Result<Vec<Utilisateur>, RepoError>;
+
+    /// Retourne le sous-ensemble `{id, pseudo}` des comptes qui existent
+    /// parmi `ids` (voir `GET /api/users/lookup`, docs/API.md). Un id sans
+    /// compte correspondant est silencieusement omis du résultat — ce
+    /// n'est ni une erreur ni un `RepoError`, l'appelant HTTP traite une
+    /// entrée manquante comme "utilisateur inconnu". `ids` est déjà
+    /// validé, non vide et borné en taille par l'appelant (voir
+    /// `interface::http::utilisateurs_controller::rechercher`).
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError>;
+
+    /// Retourne au plus `limite` comptes `{id, pseudo}` dont le pseudo
+    /// commence par `prefixe`, sans tenir compte de la casse, triés par
+    /// pseudo (voir `GET /api/users/search`, docs/API.md). `prefixe` est
+    /// déjà nettoyé, non vide et borné par l'appelant (voir
+    /// `interface::http::utilisateurs_controller::rechercher_par_pseudo`) ;
+    /// ses caractères sont pris LITTÉRALEMENT (`%`/`_` ne sont pas des
+    /// jokers).
+    async fn rechercher_par_pseudo(
+        &self,
+        prefixe: &str,
+        limite: i64,
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError>;
 
     /// Modifie un ou plusieurs champs d'un compte existant. Chaque
     /// paramètre `None` laisse la valeur actuelle inchangée (équivalent
@@ -66,6 +91,11 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
     ) -> Result<Option<Utilisateur>, RepoError>;
 
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError>;
+
+    /// Incrémente `version_auth` : tous les jetons déjà émis pour ce compte
+    /// deviennent invalides (« se déconnecter partout »). Faux si le compte
+    /// n'existe pas.
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError>;
 
     /// Variante de `supprimer` protégée contre la même course que
     /// `modifier_si_mot_de_passe_inchange`.
@@ -97,6 +127,14 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
 /// Résultat explicite d'une tentative de changement de rôle. Sépare une
 /// cible absente d'une cible admin, sans faire deviner la raison au
 /// contrôleur à partir d'un `Option`.
+/// Prévient les autres microservices qu'un compte a été supprimé, pour
+/// qu'ils effacent les données qui le concernent (serveurs possédés,
+/// messages, configuration). « Tire et oublie » : la suppression du compte
+/// ne dépend jamais de leur disponibilité.
+pub trait NotificateurSuppressionPort: Send + Sync {
+    fn compte_supprime(&self, id: Uuid);
+}
+
 pub enum ResultatChangementRole {
     Modifie(Utilisateur),
     CibleAdmin,

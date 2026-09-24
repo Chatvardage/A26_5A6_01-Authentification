@@ -138,37 +138,35 @@ impl AuthService {
         })
     }
 
-    /// `PATCH /api/auth/me` : modifie son propre profil (pseudo, courriel
-    /// et/ou mot de passe — tous optionnels, au moins un requis).
+    /// `PATCH /api/auth/me` : modifie son propre profil (pseudo et/ou mot de
+    /// passe — tous optionnels, au moins un requis). Le courriel n'est pas
+    /// modifiable par l'utilisateur (voir `ModifierProfilRequest`).
     pub async fn modifier_profil(
         &self,
         id: Uuid,
         requete: ModifierProfilRequest,
     ) -> Result<UtilisateurPublic, AppError> {
         requete.validate().map_err(AppError::Validation)?;
-        if requete.pseudo.is_none() && requete.courriel.is_none() && requete.mot_de_passe.is_none()
-        {
+        if requete.pseudo.is_none() && requete.mot_de_passe.is_none() {
             return Err(AppError::Requete(
                 "au moins un champ doit être fourni".into(),
             ));
         }
 
-        // Changer le courriel ou le mot de passe exige de reconfirmer le
-        // mot de passe actuel : un jeton volé/intercepté ne doit pas
-        // suffire à prendre le contrôle permanent du compte (voir doc de
+        // Changer le mot de passe exige de reconfirmer le mot de passe
+        // actuel : un jeton volé/intercepté ne doit pas suffire à prendre
+        // le contrôle permanent du compte (voir doc de
         // `ModifierProfilRequest::mot_de_passe_actuel`). Un changement de
-        // pseudo seul n'a pas besoin de cette confirmation.
-        let mot_de_passe_hache_actuel = if requete.courriel.is_some()
-            || requete.mot_de_passe.is_some()
-        {
+        // pseudo seul n'a pas besoin de cette confirmation. Le courriel,
+        // lui, n'est pas modifiable ici (voir `ModifierProfilRequest`).
+        let mot_de_passe_hache_actuel = if requete.mot_de_passe.is_some() {
             let mot_de_passe_actuel = requete
                 .mot_de_passe_actuel
                 .as_deref()
                 .filter(|mot_de_passe| !mot_de_passe.is_empty())
                 .ok_or_else(|| {
                     AppError::Requete(
-                        "le mot de passe actuel est requis pour changer le courriel ou le mot de passe"
-                            .into(),
+                        "le mot de passe actuel est requis pour changer le mot de passe".into(),
                     )
                 })?;
 
@@ -195,15 +193,13 @@ impl AuthService {
             Some(mot_de_passe) => Some(hacher_mot_de_passe(mot_de_passe).await?),
             None => None,
         };
-        let courriel = requete.courriel.as_deref().map(normaliser_courriel);
-
         let utilisateur = if let Some(mot_de_passe_hache_actuel) = mot_de_passe_hache_actuel {
             self.depot
                 .modifier_si_mot_de_passe_inchange(
                     id,
                     &mot_de_passe_hache_actuel,
                     requete.pseudo.as_deref(),
-                    courriel.as_deref(),
+                    None, // courriel : jamais modifiable ici
                     hache_mot_de_passe.as_deref(),
                 )
                 .await
@@ -214,7 +210,7 @@ impl AuthService {
                 .modifier(
                     id,
                     requete.pseudo.as_deref(),
-                    courriel.as_deref(),
+                    None, // courriel : jamais modifiable ici
                     hache_mot_de_passe.as_deref(),
                 )
                 .await

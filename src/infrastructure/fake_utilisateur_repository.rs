@@ -10,7 +10,7 @@
 //! base, dans `pg_utilisateur_repository.rs`.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -18,7 +18,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
-use crate::domain::utilisateur::{Role, Utilisateur};
+use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[derive(Default)]
 pub struct FakeUtilisateurRepository {
@@ -28,9 +28,19 @@ pub struct FakeUtilisateurRepository {
     /// tester la branche 500 de chaque contrôleur sans dépendre d'une
     /// vraie panne PostgreSQL.
     provoque_erreur: AtomicBool,
+    /// Variante de `provoque_erreur` qui laisse d'abord passer quelques
+    /// appels (voir `provoquer_erreur_interne_apres`) : 0 = désactivé,
+    /// sinon nombre d'appels encore acceptés + 1.
+    appels_avant_erreur: AtomicUsize,
     /// Simule une suppression concurrente entre le chargement de la cible
     /// par l'extracteur et la mutation atomique du rôle.
     supprimer_avant_changement_role: AtomicBool,
+    /// Simule une promotion admin concurrente entre le chargement de la
+    /// cible par l'extracteur et la mutation atomique du rôle.
+    promouvoir_admin_avant_changement_role: AtomicBool,
+    /// Simule un changement de mot de passe concurrent entre la
+    /// vérification du mot de passe actuel et la suppression du compte.
+    changer_mot_de_passe_avant_suppression: AtomicBool,
 }
 
 impl FakeUtilisateurRepository {
@@ -42,8 +52,25 @@ impl FakeUtilisateurRepository {
         self.provoque_erreur.store(valeur, Ordering::SeqCst);
     }
 
+    /// Laisse passer `appels` appels, puis bascule tous les suivants en
+    /// `RepoError::Interne` — pour atteindre une erreur de stockage située
+    /// après l'authentification (qui lit déjà le dépôt).
+    pub fn provoquer_erreur_interne_apres(&self, appels: usize) {
+        self.appels_avant_erreur.store(appels + 1, Ordering::SeqCst);
+    }
+
     pub fn provoquer_suppression_avant_changement_role(&self) {
         self.supprimer_avant_changement_role
+            .store(true, Ordering::SeqCst);
+    }
+
+    pub fn provoquer_promotion_admin_avant_changement_role(&self) {
+        self.promouvoir_admin_avant_changement_role
+            .store(true, Ordering::SeqCst);
+    }
+
+    pub fn provoquer_changement_mot_de_passe_avant_suppression(&self) {
+        self.changer_mot_de_passe_avant_suppression
             .store(true, Ordering::SeqCst);
     }
 
@@ -59,7 +86,11 @@ impl FakeUtilisateurRepository {
     }
 
     fn verifier_erreur_provoquee(&self) -> Result<(), RepoError> {
-        if self.provoque_erreur.load(Ordering::SeqCst) {
+        let restants = self.appels_avant_erreur.load(Ordering::SeqCst);
+        if restants > 1 {
+            self.appels_avant_erreur.fetch_sub(1, Ordering::SeqCst);
+        }
+        if self.provoque_erreur.load(Ordering::SeqCst) || restants == 1 {
             Err(RepoError::Interne("erreur simulée pour les tests".into()))
         } else {
             Ok(())
@@ -136,6 +167,51 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             .collect())
     }
 
+    async fn rechercher_par_ids(
+        &self,
+        ids: &[Uuid],
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        let utilisateurs = self.utilisateurs.read().await;
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                utilisateurs.get(id).map(|u| UtilisateurLookupPublic {
+                    id: u.id,
+                    pseudo: u.pseudo.clone(),
+                })
+            })
+            .collect())
+    }
+
+    async fn rechercher_par_pseudo(
+        &self,
+        prefixe: &str,
+        limite: i64,
+    ) -> Result<Vec<UtilisateurLookupPublic>, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        let prefixe = prefixe.to_lowercase();
+        let mut resultat: Vec<UtilisateurLookupPublic> = self
+            .utilisateurs
+            .read()
+            .await
+            .values()
+            .filter(|u| u.pseudo.to_lowercase().starts_with(&prefixe))
+            .map(|u| UtilisateurLookupPublic {
+                id: u.id,
+                pseudo: u.pseudo.clone(),
+            })
+            .collect();
+        resultat.sort_by(|a, b| {
+            a.pseudo
+                .to_lowercase()
+                .cmp(&b.pseudo.to_lowercase())
+                .then_with(|| a.pseudo.cmp(&b.pseudo))
+        });
+        resultat.truncate(limite.max(0) as usize);
+        Ok(resultat)
+    }
+
     async fn modifier(
         &self,
         id: Uuid,
@@ -178,6 +254,17 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
     async fn supprimer(&self, id: Uuid) -> Result<bool, RepoError> {
         self.verifier_erreur_provoquee()?;
         Ok(self.utilisateurs.write().await.remove(&id).is_some())
+    }
+
+    async fn invalider_sessions(&self, id: Uuid) -> Result<bool, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        Ok(match self.utilisateurs.write().await.get_mut(&id) {
+            Some(utilisateur) => {
+                utilisateur.version_auth += 1;
+                true
+            }
+            None => false,
+        })
     }
 
     async fn modifier_si_mot_de_passe_inchange(
@@ -233,6 +320,14 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         self.verifier_erreur_provoquee()?;
 
         let mut utilisateurs = self.utilisateurs.write().await;
+        if self
+            .changer_mot_de_passe_avant_suppression
+            .swap(false, Ordering::SeqCst)
+        {
+            if let Some(utilisateur) = utilisateurs.get_mut(&id) {
+                utilisateur.mot_de_passe_hache = "change-en-parallele".to_string();
+            }
+        }
         let Some(utilisateur) = utilisateurs.get(&id) else {
             return Ok(false);
         };
@@ -260,6 +355,12 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         let Some(utilisateur) = utilisateurs.get_mut(&id) else {
             return Ok(ResultatChangementRole::Introuvable);
         };
+        if self
+            .promouvoir_admin_avant_changement_role
+            .swap(false, Ordering::SeqCst)
+        {
+            utilisateur.role = Role::Admin.as_str().to_string();
+        }
         if utilisateur.role == Role::Admin.as_str() {
             return Ok(ResultatChangementRole::CibleAdmin);
         }
@@ -372,6 +473,14 @@ mod tests {
             Err(RepoError::Interne(_))
         ));
         assert!(matches!(
+            repo.rechercher_par_ids(&[Uuid::new_v4()]).await,
+            Err(RepoError::Interne(_))
+        ));
+        assert!(matches!(
+            repo.rechercher_par_pseudo("a", 20).await,
+            Err(RepoError::Interne(_))
+        ));
+        assert!(matches!(
             repo.modifier(Uuid::new_v4(), Some("x"), None, None).await,
             Err(RepoError::Interne(_))
         ));
@@ -402,6 +511,61 @@ mod tests {
         repo.provoquer_erreur_interne(false);
         assert!(repo.lister(100, 0).await.is_ok());
         assert!(repo.verifier_sante().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_omet_les_ids_inexistants() {
+        let repo = FakeUtilisateurRepository::new();
+        let alice = repo
+            .creer("alice", "alice@example.com", "hash")
+            .await
+            .unwrap();
+        let bob = repo.creer("bob", "bob@example.com", "hash").await.unwrap();
+        let id_inconnu = Uuid::new_v4();
+
+        let resultat = repo
+            .rechercher_par_ids(&[alice.id, id_inconnu, bob.id])
+            .await
+            .unwrap();
+
+        assert_eq!(resultat.len(), 2);
+        assert!(resultat
+            .iter()
+            .any(|u| u.id == alice.id && u.pseudo == "alice"));
+        assert!(resultat.iter().any(|u| u.id == bob.id && u.pseudo == "bob"));
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_ids_liste_vide_retourne_vecteur_vide() {
+        let repo = FakeUtilisateurRepository::new();
+        assert!(repo.rechercher_par_ids(&[]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn rechercher_par_pseudo_filtre_par_prefixe_trie_et_limite() {
+        let repo = FakeUtilisateurRepository::new();
+        for pseudo in ["Bob", "alice", "Alicia", "albert", "zoe"] {
+            repo.creer(pseudo, &format!("{pseudo}@example.com"), "hash")
+                .await
+                .unwrap();
+        }
+
+        let pseudos = |resultat: Vec<UtilisateurLookupPublic>| {
+            resultat.into_iter().map(|u| u.pseudo).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            pseudos(repo.rechercher_par_pseudo("AL", 20).await.unwrap()),
+            ["albert", "alice", "Alicia"]
+        );
+        assert_eq!(
+            pseudos(repo.rechercher_par_pseudo("al", 2).await.unwrap()),
+            ["albert", "alice"]
+        );
+        assert!(repo
+            .rechercher_par_pseudo("x", 20)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

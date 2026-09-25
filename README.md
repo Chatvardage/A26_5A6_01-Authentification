@@ -30,8 +30,6 @@ client desktop (dépôt `A26_5A6_01-Frontend`) et un dépôt
 - [Lancer les tests](#lancer-les-tests)
 - [Endpoints de l'API](#endpoints-de-lapi)
 - [Créer un premier compte admin](#créer-un-premier-compte-admin)
-- [Intégration avec le reste de l'équipe](#intégration-avec-le-reste-de-léquipe)
-- [Versions (tags Git)](#versions-tags-git)
 - [Limites connues et pistes d'amélioration](#limites-connues-et-pistes-damélioration)
 
 ## Objectif de ce service
@@ -479,9 +477,7 @@ le tout premier admin. Marche à suivre :
    sort de l'API, volontairement (voir plus haut) :
 
    ```bash
-docker exec chatvardage-postgres \
-  psql -U postgres -d chatvardage_auth \
-  -c "UPDATE utilisateurs SET role='admin' WHERE pseudo='tonpseudo';"
+    docker exec chatvardage-postgres \ psql -U postgres -d chatvardage_auth \ -c "UPDATE utilisateurs SET role='admin' WHERE pseudo='tonpseudo';"
    ```
 
 3. **Utiliser le jeton existant ou se reconnecter.** Le middleware relit

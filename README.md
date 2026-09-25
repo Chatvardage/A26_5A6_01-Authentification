@@ -477,7 +477,9 @@ le tout premier admin. Marche à suivre :
    sort de l'API, volontairement (voir plus haut) :
 
    ```bash
-    docker exec chatvardage-postgres \ psql -U postgres -d chatvardage_auth \ -c "UPDATE utilisateurs SET role='admin' WHERE pseudo='tonpseudo';"
+    docker exec chatvardage-postgres \
+      psql -U postgres -d chatvardage_auth \
+      -c "UPDATE utilisateurs SET role='admin' WHERE pseudo='tonpseudo';"
    ```
 
 3. **Utiliser le jeton existant ou se reconnecter.** Le middleware relit

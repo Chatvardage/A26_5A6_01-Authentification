@@ -2,7 +2,7 @@
 
 API Rust/Axum : inscription, connexion, JWT, comptes et rôles. PostgreSQL conserve les utilisateurs; Prisma gère les migrations et SQLx les requêtes.
 
-## Lancer le service complet (Contrôle 2)
+## Lancer le service complet
 
 Le [README Infra](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/README.md) est le point de départ : clonage des huit dépôts, secrets, Docker Compose, administration et client desktop.
 
@@ -43,9 +43,9 @@ cargo build --release
 
 Les migrations appartiennent à ce dépôt (`prisma/` lorsqu’applicable); Infra crée uniquement les bases et les comptes SQL. Consulter [AGENTS.md](AGENTS.md) pour les règles et vérifications supplémentaires.
 
-## Documentation et remise
+## Documentation
 
 - [Architecture complète](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/architecture.md)
 - [API et événements](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/api/README.md)
-- [Scénario de validation C2](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/validation-c2.md)
-- [Versions et livrables](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/remise-c2.md)
+- [Scénario de validation](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/validation.md)
+- [Versions et publication](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/versions.md)

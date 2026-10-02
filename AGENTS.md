@@ -4,9 +4,8 @@ Ce fichier contient les règles de travail pour tout agent IA ou développeur qu
 
 ## Instructions importantes
 
-- Ne crée pas de commits
-- Fait seulement des modifications dans les fichiers sans commits
-- Explique moi un plan et demande mon approbation avant de modifier des fichiers
+- Présenter un plan avant les modifications.
+- Les commits sont permis lorsque le demandeur les autorise explicitement; vérifier les changements et les tests avant de les créer.
 
 
 ## Contexte du projet
@@ -253,3 +252,6 @@ Vérifier :
 - [ ] les changements incompatibles avec le client desktop, `infra` ou les autres services (ex. format du jeton JWT, variables d'environnement attendues) sont documentés.
 
 Dans la description de PR, résumer les changements, indiquer les tests exécutés et signaler tout impact sur les autres dépôts.
+## Documentation centrale du contrôle 2
+
+Infra est la référence du démarrage complet, des architectures, contrats et scénarios de remise. Le README local décrit le dépôt et ses commandes; les guides détaillés sont dans `A26_5A6_01-Infra/docs/`. Toute modification de contrat doit mettre à jour la référence centrale et ses liens. Mobile relève du contrôle 3.

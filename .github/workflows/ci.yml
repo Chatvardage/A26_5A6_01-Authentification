@@ -9,6 +9,7 @@ on:
   pull_request:
   push:
     branches: [main, develop]
+    tags: ['v*']
 
 permissions:
   contents: read
@@ -52,6 +53,7 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # Migrations Prisma (seul outil de schéma du service) avant les tests.
+      - run: node scripts/verifier-version.mjs
       - run: npm ci
       - run: npx prisma migrate deploy
       - run: cargo test

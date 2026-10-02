@@ -1,0 +1,67 @@
+# docker-compose.yml DE CE DÉPÔT = pour développer et démontrer le
+# service d'authentification SEUL, en isolation, avec sa propre base
+# PostgreSQL de développement. Le dépôt "infra" de l'équipe a son propre
+# docker-compose.yml qui assemble ce service (comme image Docker) avec
+# les autres services (salons, messages, etc.), un Redis partagé et une
+# base PostgreSQL partagée — voir README, section "Intégration avec le
+# reste de l'équipe".
+#
+# PostgreSQL est la source de vérité (aucun mode mock/en mémoire, voir
+# énoncé du contrôle) : `docker compose up --build` démarre une base
+# PostgreSQL, applique les migrations Prisma (`npx prisma migrate
+# deploy`, exécuté par le conteneur `auth-api` à son démarrage — voir
+# Dockerfile), puis lance l'API.
+#
+# Utilisation :
+#   docker compose up --build
+#   -> API disponible sur http://localhost:3001
+#   -> curl http://localhost:3001/health
+#   -> arrêter : Ctrl+C puis `docker compose down`
+#      (ajouter `-v` pour aussi supprimer les données PostgreSQL — irréversible)
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chatvardage-auth-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER doit être défini dans .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD doit être défini dans .env}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB doit être défini dans .env}
+    ports:
+      # Base de développement accessible seulement depuis la machine hôte :
+      # les identifiants locaux ne doivent pas être publiés sur le réseau.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - auth-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+
+  auth-api:
+    build: .
+    container_name: chatvardage-auth-api
+    ports:
+      # Le Gateway porte la limitation de débit en intégration. En mode
+      # autonome, l'API reste donc accessible seulement depuis l'hôte.
+      - "127.0.0.1:${PORT:-3001}:${PORT:-3001}"
+    environment:
+      # Pas de `?schema=public` : SQLx ignore ce paramètre (convention
+      # Prisma) avec un avertissement — inutile ici, la base n'a qu'un
+      # seul schéma ("public", le défaut PostgreSQL).
+      DATABASE_URL: ${DATABASE_URL_DOCKER:?DATABASE_URL_DOCKER doit être définie dans .env}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET doit être défini dans .env}
+      JWT_DUREE_DE_VIE_HEURES: ${JWT_DUREE_DE_VIE_HEURES:-24}
+      PORT: ${PORT:-3001}
+      RUST_LOG: ${RUST_LOG:-info}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  auth-db-data:

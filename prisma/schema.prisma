@@ -1,0 +1,64 @@
+// Schéma Prisma du service d'authentification ChatVardage.
+//
+// Prisma ne sert ICI que d'outil de migration (CLI Node.js) : le binaire
+// Rust n'utilise jamais de client Prisma au runtime, seulement SQLx
+// (voir src/infrastructure/pg_utilisateur_repository.rs). Toute
+// modification de ce fichier doit être répercutée dans ce fichier SQLx
+// (et vice-versa) — voir AGENTS.md, section "Base de données et Prisma".
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Utilisateur {
+  // `dbgenerated("gen_random_uuid()")`, pas `@default(uuid())` : ce dernier
+  // génère l'UUID côté client Prisma, jamais appelé au runtime dans ce
+  // service (voir en-tête de fichier) — la colonne aurait alors une
+  // contrainte NOT NULL sans aucune valeur par défaut côté PostgreSQL, et
+  // l'INSERT de src/infrastructure/pg_utilisateur_repository.rs (qui ne
+  // fournit pas `id`) échouerait. `gen_random_uuid()` est une fonction
+  // native de PostgreSQL depuis la version 13, aucune extension requise.
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  pseudo             String   @unique
+  // ⚠️ `@unique` déclare ici un index btree standard (sensible à la
+  // casse) — mais la migration `index_courriel_insensible_a_la_casse`
+  // (prisma/migrations/) l'a remplacé en base par un index UNIQUE
+  // fonctionnel sur LOWER(courriel), pour que l'unicité soit garantie
+  // par PostgreSQL indépendamment de la discipline applicative
+  // (AuthService normalise déjà en minuscules avant chaque écriture —
+  // voir pg_utilisateur_repository.rs). Prisma ne modélise pas les index
+  // fonctionnels/expression : cette annotation reste donc « fausse » au
+  // sens strict (documentation seulement) — ne pas relancer `prisma
+  // migrate dev` sur ce modèle sans relire attentivement le SQL généré,
+  // qui pourrait proposer de revenir à un index standard sur `courriel`.
+  courriel           String   @unique
+  mot_de_passe_hache String
+  version_auth       Int      @default(0)
+  role               String   @default("utilisateur")
+  // `@db.Timestamptz` (avec fuseau) sur les deux colonnes : le code Rust
+  // lit ces colonnes dans `chrono::DateTime<Utc>` (voir
+  // src/domain/utilisateur.rs), qui correspond au type PostgreSQL
+  // `timestamptz` — pas `timestamp` (le défaut de Prisma pour `DateTime`
+  // sans cette annotation), qui se décoderait comme `NaiveDateTime` côté
+  // SQLx et ferait échouer chaque requête à l'exécution.
+  //
+  // Pas de `@updatedAt` sur `modifie_le` : cette directive Prisma ne met à
+  // jour la colonne que via le client Prisma (jamais appelé ici, voir
+  // en-tête de fichier) — sans effet côté base de données. `modifie_le`
+  // a donc un simple défaut `now()` comme `cree_le`, et c'est le SQL de
+  // `pg_utilisateur_repository.rs` qui la remet à jour explicitement
+  // (`SET modifie_le = now()`) à chaque UPDATE.
+  cree_le            DateTime @default(now()) @db.Timestamptz
+  modifie_le         DateTime @default(now()) @db.Timestamptz
+
+  // Créé par la migration `index_utilisateurs_cree_le` (GET /api/users trie
+  // par cree_le DESC) : déclaré ici pour que Prisma ne propose pas de le
+  // supprimer.
+  @@index([cree_le(sort: Desc)], map: "utilisateurs_cree_le_idx")
+  @@map("utilisateurs")
+}

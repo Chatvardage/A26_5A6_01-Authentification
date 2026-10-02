@@ -1,0 +1,8 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071: rsa 0.9.x timing side-channel.
+    # Dependency is present in Cargo.lock through SQLx 0.8.x metadata,
+    # but is not part of the active dependency graph for our PostgreSQL build.
+    # SQLx 0.9 requires Rust 1.94, while this project targets Rust 1.88.
+    "RUSTSEC-2023-0071",
+]

@@ -57,5 +57,8 @@ jobs:
       # Migrations Prisma (seul outil de schéma du service) avant les tests.
       - run: node scripts/verifier-version.mjs
       - run: npm ci
+      # Toutes les dependances (dev comprises) : une vulnerabilite high ou
+      # critical ne doit pas pouvoir entrer sans faire echouer le CI.
+      - run: npm audit --audit-level=high
       - run: npx prisma migrate deploy
       - run: cargo test

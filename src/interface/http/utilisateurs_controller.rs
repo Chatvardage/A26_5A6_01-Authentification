@@ -238,7 +238,7 @@ pub async fn supprimer(
 }
 
 /// PATCH /api/users/:id/role — change le rôle d'un utilisateur (admin
-/// uniquement). Permet de promouvoir un utilisateur en modérateur/admin.
+/// uniquement). Permet de promouvoir un utilisateur en admin.
 pub async fn changer_role(
     State(state): State<AppState>,
     AdministrateurEtUtilisateurNonAdmin {

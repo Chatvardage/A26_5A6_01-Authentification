@@ -3,7 +3,7 @@
 //! En Rust, une "entité" comme celle-ci est souvent une simple `struct`
 //! (pas de classe, pas d'héritage). Les règles qui doivent TOUJOURS être
 //! vraies pour un utilisateur (ex. : un rôle ne peut être que l'une de ces
-//! trois valeurs) vivent ici, pas dans les contrôleurs HTTP.
+//! deux valeurs) vivent ici, pas dans les contrôleurs HTTP.
 //!
 //! Note sur les noms : tous les identifiants Rust ci-dessous évitent les
 //! accents (ex. `cree_le` plutôt que `créé_le`) — les accents restent
@@ -13,8 +13,9 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Rôle d'un utilisateur, utilisé pour les permissions (voir énoncé :
-/// "gestion des permissions (ex. : admin, modérateur, utilisateur)").
+/// Rôle global d'un utilisateur. Le rôle modérateur n'existe qu'à
+/// l'intérieur d'un serveur (propriétaire / modérateur / membre, géré par
+/// Room-Service) : il n'y a pas de modérateur global.
 ///
 /// `#[derive(...)]` génère automatiquement du code pour nous : ici, la
 /// capacité à comparer deux rôles (`PartialEq`), à les dupliquer (`Clone`,
@@ -25,7 +26,6 @@ use uuid::Uuid;
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     Admin,
-    Moderateur,
     Utilisateur,
 }
 
@@ -35,7 +35,6 @@ impl Role {
     pub fn as_str(&self) -> &'static str {
         match self {
             Role::Admin => "admin",
-            Role::Moderateur => "moderateur",
             Role::Utilisateur => "utilisateur",
         }
     }
@@ -47,7 +46,6 @@ impl Role {
     pub fn from_str(value: &str) -> Self {
         match value {
             "admin" => Role::Admin,
-            "moderateur" => Role::Moderateur,
             "utilisateur" => Role::Utilisateur,
             valeur_inconnue => {
                 tracing::warn!(
@@ -150,9 +148,16 @@ mod tests {
 
     #[test]
     fn roundtrip_role_vers_texte_et_retour() {
-        for role in [Role::Admin, Role::Moderateur, Role::Utilisateur] {
+        for role in [Role::Admin, Role::Utilisateur] {
             assert_eq!(Role::from_str(role.as_str()), role);
         }
+    }
+
+    #[test]
+    fn ancien_role_global_moderateur_retombe_sur_utilisateur() {
+        // Les modérateurs n'existent plus qu'au niveau des serveurs
+        // (Room-Service) ; la migration convertit les anciennes valeurs.
+        assert_eq!(Role::from_str("moderateur"), Role::Utilisateur);
     }
 
     #[test]

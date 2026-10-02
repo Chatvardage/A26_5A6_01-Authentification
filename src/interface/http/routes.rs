@@ -1601,7 +1601,7 @@ mod tests {
             "PATCH",
             &format!("/api/users/{id_alice}/role"),
             Some(&jeton_admin),
-            Some(json!({ "role": "moderateur" })),
+            Some(json!({ "role": "utilisateur" })),
         )
         .await;
         assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
@@ -1621,11 +1621,11 @@ mod tests {
             "PATCH",
             &format!("/api/users/{id_alice}/role"),
             Some(&jeton_admin),
-            Some(json!({ "role": "moderateur" })),
+            Some(json!({ "role": "utilisateur" })),
         )
         .await;
         assert_eq!(statut, StatusCode::OK);
-        assert_eq!(corps["role"], "moderateur");
+        assert_eq!(corps["role"], "utilisateur");
 
         let (statut, _) = requete(
             &ctx.app,
@@ -1757,6 +1757,18 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::BAD_REQUEST);
         assert_eq!(corps["erreur"], "corps JSON invalide");
+
+        // Le modérateur n'est plus un rôle global : il n'existe que dans
+        // les serveurs (Room-Service).
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{id_alice}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "moderateur" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -1806,7 +1818,7 @@ mod tests {
             "PATCH",
             &format!("/api/users/{id_alice}/role"),
             Some(&jeton_admin),
-            Some(json!({ "role": "moderateur" })),
+            Some(json!({ "role": "utilisateur" })),
         )
         .await;
 
@@ -1833,7 +1845,7 @@ mod tests {
             "PATCH",
             &format!("/api/users/{id_alice}/role"),
             Some(&jeton_admin),
-            Some(json!({ "role": "moderateur" })),
+            Some(json!({ "role": "utilisateur" })),
         )
         .await;
 

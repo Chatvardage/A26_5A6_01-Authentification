@@ -25,11 +25,12 @@ tokio = { version = "1", features = ["full"] }
 # Client PostgreSQL asynchrone. On utilise l'API "query builder" à
 # l'exécution (pas les macros query! qui exigent une DB disponible au
 # moment de la compilation) pour rester simple au départ.
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio-rustls",
     "postgres",
     "uuid",
     "chrono",
+    "derive",
 ] }
 
 # Permet d'écrire des traits avec des méthodes `async fn` utilisables en
@@ -71,7 +72,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 thiserror = "1"
 
 # Validation simple des entrées (format courriel, longueur mot de passe...).
-validator = { version = "0.18", features = ["derive"] }
+validator = { version = "0.21", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false }
 
 [dev-dependencies]

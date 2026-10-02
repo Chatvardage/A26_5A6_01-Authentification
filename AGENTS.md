@@ -110,7 +110,10 @@ Puis exécuter au minimum :
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 DATABASE_URL=postgres://chatvardage:chatvardage@localhost:5432/chatvardage_auth cargo test
+npm audit --audit-level=high
 ```
+
+**Audit des dépendances** : le CI lance `npm audit --audit-level=high` (dépendances de dev comprises). Si un avis `high` ou `critical` sans correctif compatible le bloque, forcer une version corrigée par un `overrides` ciblé dans `package.json` si elle existe ; sinon consigner l'exception (paquet, avis, raison, condition de retrait). Ne pas retirer ni affaiblir l'étape.
 
 Pour une modification importante de logique métier, exécuter aussi :
 
@@ -139,7 +142,7 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 - Toute nouvelle branche de logique **atteignable** (succès, refus, erreurs métier) doit être accompagnée de tests plutôt que de faire baisser artificiellement le seuil.
 - Les tests HTTP de bout en bout (`interface/http/routes.rs`) utilisent `infrastructure::fake_utilisateur_repository::FakeUtilisateurRepository` — un dépôt en mémoire compilé uniquement en mode test (`#[cfg(test)]`), jamais exposé en production. Il expose `provoquer_erreur_interne(bool)` pour tester la branche 500 sans dépendre d'une vraie panne PostgreSQL.
 - Pour un rapport détaillé (voir quelles lignes manquent) : `cargo llvm-cov --ignore-filename-regex 'main\.rs' --html`, puis ouvrir `target/llvm-cov/html/index.html`.
-- Avant une PR : `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, `cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 99`, `cargo build --release`.
+- Avant une PR : `cargo fmt --check`, `cargo clippy --all-targets --all-features -- -D warnings`, `cargo test`, `cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 99`, `cargo build --release`, `npm audit --audit-level=high`.
 
 ## Lint, style et qualité
 
@@ -247,6 +250,7 @@ Vérifier :
 - [ ] `cargo test` passe;
 - [ ] `cargo llvm-cov --ignore-filename-regex 'main\.rs' --fail-under-lines 99` passe (≥ 99 % de couverture, `main.rs` exclu — voir [Couverture obligatoire](#couverture-obligatoire));
 - [ ] `cargo build --release` passe;
+- [ ] `npm audit --audit-level=high` passe (CLI Prisma);
 - [ ] `docs/API.md` et le README sont à jour;
 - [ ] `docker compose up --build` fonctionne si Docker/DB/migrations ont été modifiés, et le Dockerfile respecte la séquence `prisma generate` (build) / `prisma migrate deploy` (démarrage) du guide `infra`;
 - [ ] les changements incompatibles avec le client desktop, `infra` ou les autres services (ex. format du jeton JWT, variables d'environnement attendues) sont documentés.

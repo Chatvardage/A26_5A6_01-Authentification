@@ -20,8 +20,11 @@ use uuid::Uuid;
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
 use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
+type SessionTest = (Uuid, Uuid, i32, bool, bool);
+
 #[derive(Default)]
 pub struct FakeUtilisateurRepository {
+    sessions: RwLock<HashMap<String, SessionTest>>,
     utilisateurs: RwLock<HashMap<Uuid, Utilisateur>>,
     /// Bascule *tous* les appels suivants sur ce dépôt en
     /// `RepoError::Interne` (voir `provoquer_erreur_interne`) — permet de
@@ -41,6 +44,8 @@ pub struct FakeUtilisateurRepository {
     /// Simule un changement de mot de passe concurrent entre la
     /// vérification du mot de passe actuel et la suppression du compte.
     changer_mot_de_passe_avant_suppression: AtomicBool,
+    /// Simule la même course pendant une modification de profil.
+    changer_mot_de_passe_avant_modification: AtomicBool,
 }
 
 impl FakeUtilisateurRepository {
@@ -50,6 +55,9 @@ impl FakeUtilisateurRepository {
 
     pub fn provoquer_erreur_interne(&self, valeur: bool) {
         self.provoque_erreur.store(valeur, Ordering::SeqCst);
+        if !valeur {
+            self.appels_avant_erreur.store(0, Ordering::SeqCst);
+        }
     }
 
     /// Laisse passer `appels` appels, puis bascule tous les suivants en
@@ -71,6 +79,11 @@ impl FakeUtilisateurRepository {
 
     pub fn provoquer_changement_mot_de_passe_avant_suppression(&self) {
         self.changer_mot_de_passe_avant_suppression
+            .store(true, Ordering::SeqCst);
+    }
+
+    pub fn provoquer_changement_mot_de_passe_avant_modification(&self) {
+        self.changer_mot_de_passe_avant_modification
             .store(true, Ordering::SeqCst);
     }
 
@@ -100,6 +113,60 @@ impl FakeUtilisateurRepository {
 
 #[async_trait]
 impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
+    async fn creer_session(
+        &self,
+        id: Uuid,
+        version: i32,
+        famille: Uuid,
+        hache: &str,
+    ) -> Result<(), RepoError> {
+        self.verifier_erreur_provoquee()?;
+        self.sessions
+            .write()
+            .await
+            .insert(hache.into(), (id, famille, version, false, false));
+        Ok(())
+    }
+    async fn renouveler_session(
+        &self,
+        ancien: &str,
+        nouveau: &str,
+    ) -> Result<Option<(Utilisateur, Uuid)>, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        let users = self.utilisateurs.read().await;
+        let mut sessions = self.sessions.write().await;
+        let Some(&(id, famille, version, used, revoked)) = sessions.get(ancien) else {
+            return Ok(None);
+        };
+        let Some(user) = users.get(&id) else {
+            return Ok(None);
+        };
+        if used || revoked || user.version_auth != version {
+            return Ok(None);
+        }
+        sessions.insert(ancien.into(), (id, famille, version, true, revoked));
+        sessions.insert(nouveau.into(), (id, famille, version, false, false));
+        Ok(Some((user.clone(), famille)))
+    }
+    async fn revoquer_session(&self, hache: &str) -> Result<(), RepoError> {
+        self.verifier_erreur_provoquee()?;
+        let mut sessions = self.sessions.write().await;
+        if let Some(&(_, famille, _, _, _)) = sessions.get(hache) {
+            for value in sessions.values_mut().filter(|s| s.1 == famille) {
+                value.4 = true;
+            }
+        }
+        Ok(())
+    }
+    async fn session_active(&self, famille: Uuid, id: Uuid) -> Result<bool, RepoError> {
+        self.verifier_erreur_provoquee()?;
+        Ok(self
+            .sessions
+            .read()
+            .await
+            .values()
+            .any(|s| s.0 == id && s.1 == famille && !s.3 && !s.4))
+    }
     async fn creer(
         &self,
         pseudo: &str,
@@ -278,6 +345,15 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         self.verifier_erreur_provoquee()?;
 
         let mut utilisateurs = self.utilisateurs.write().await;
+        if self
+            .changer_mot_de_passe_avant_modification
+            .swap(false, Ordering::SeqCst)
+        {
+            if let Some(user) = utilisateurs.get_mut(&id) {
+                user.mot_de_passe_hache = "hachage-modifie-concurremment".into();
+                user.version_auth += 1;
+            }
+        }
         if !utilisateurs.contains_key(&id) {
             return Ok(None);
         }
@@ -377,6 +453,24 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn recherche_departage_la_casse_et_arret_panne_retablit_le_depot() {
+        use super::*;
+        let repo = FakeUtilisateurRepository::new();
+        repo.creer("Alice", "a@example.com", "hash").await.unwrap();
+        repo.creer("alice", "b@example.com", "hash").await.unwrap();
+        let users = repo.rechercher_par_pseudo("al", 20).await.unwrap();
+        assert_eq!(
+            users.iter().map(|u| u.pseudo.as_str()).collect::<Vec<_>>(),
+            ["Alice", "alice"]
+        );
+        repo.provoquer_erreur_interne_apres(0);
+        assert!(repo.verifier_sante().await.is_err());
+        repo.provoquer_erreur_interne(false);
+        assert!(repo.verifier_sante().await.is_ok());
+        repo.changer_role_pour_test(Uuid::new_v4(), Role::Admin)
+            .await;
+    }
     use super::*;
 
     #[tokio::test]

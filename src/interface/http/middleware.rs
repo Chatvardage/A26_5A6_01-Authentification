@@ -82,6 +82,16 @@ impl FromRequestParts<AppState> for UtilisateurAuthentifie {
         if claims.version_auth != utilisateur.version_auth {
             return Err(AppError::NonAutorise("jeton révoqué".into()));
         }
+        if let Some(famille) = claims.sid {
+            if !state
+                .depot_utilisateurs
+                .session_active(famille, id_utilisateur)
+                .await
+                .map_err(|e| AppError::Interne(e.to_string()))?
+            {
+                return Err(AppError::NonAutorise("session révoquée".into()));
+            }
+        }
         let role = utilisateur.role();
         let utilisateur = UtilisateurPublic::from(utilisateur);
 

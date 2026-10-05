@@ -40,6 +40,95 @@ fn echapper_like(texte: &str) -> String {
 
 #[async_trait]
 impl UtilisateurRepositoryPort for PgUtilisateurRepository {
+    async fn creer_session(
+        &self,
+        id: Uuid,
+        version: i32,
+        famille: Uuid,
+        hache: &str,
+    ) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin().await.map_err(mapper_erreur_sql)?;
+        let current: Option<i32> =
+            sqlx::query_scalar("SELECT version_auth FROM utilisateurs WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        if current != Some(version) {
+            return Err(RepoError::Interne(
+                "compte modifié pendant la connexion".into(),
+            ));
+        }
+        sqlx::query("INSERT INTO sessions_refresh (hache, famille, utilisateur_id, version_auth) VALUES ($1,$2,$3,$4)")
+            .bind(hache).bind(famille).bind(id).bind(version).execute(&mut *tx).await.map_err(mapper_erreur_sql)?;
+        tx.commit().await.map_err(mapper_erreur_sql)
+    }
+
+    async fn renouveler_session(
+        &self,
+        ancien: &str,
+        nouveau: &str,
+    ) -> Result<Option<(Utilisateur, Uuid)>, RepoError> {
+        let mut tx = self.pool.begin().await.map_err(mapper_erreur_sql)?;
+        let token: Option<(Uuid, Uuid)> =
+            sqlx::query_as("SELECT utilisateur_id, famille FROM sessions_refresh WHERE hache = $1")
+                .bind(ancien)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        let Some((id, famille)) = token else {
+            return Ok(None);
+        };
+        // Same user row lock for refresh, logout and password/version changes.
+        let user =
+            sqlx::query_as::<_, Utilisateur>("SELECT * FROM utilisateurs WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        let Some(user) = user else {
+            return Ok(None);
+        };
+        let expiration: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+            "UPDATE sessions_refresh SET consomme = true WHERE hache = $1 AND NOT consomme AND NOT revoque AND expire_le > clock_timestamp() AND version_auth = $2 RETURNING expire_le")
+            .bind(ancien).bind(user.version_auth).fetch_optional(&mut *tx).await.map_err(mapper_erreur_sql)?;
+        let Some(expiration) = expiration else {
+            return Ok(None);
+        };
+        sqlx::query("INSERT INTO sessions_refresh (hache, famille, utilisateur_id, version_auth, expire_le) VALUES ($1,$2,$3,$4,$5)")
+            .bind(nouveau).bind(famille).bind(id).bind(user.version_auth).bind(expiration)
+            .execute(&mut *tx).await.map_err(mapper_erreur_sql)?;
+        tx.commit().await.map_err(mapper_erreur_sql)?;
+        Ok(Some((user, famille)))
+    }
+
+    async fn revoquer_session(&self, hache: &str) -> Result<(), RepoError> {
+        let mut tx = self.pool.begin().await.map_err(mapper_erreur_sql)?;
+        let token: Option<(Uuid, Uuid)> =
+            sqlx::query_as("SELECT utilisateur_id, famille FROM sessions_refresh WHERE hache = $1")
+                .bind(hache)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        if let Some((id, famille)) = token {
+            sqlx::query("SELECT id FROM utilisateurs WHERE id = $1 FOR UPDATE")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+            sqlx::query("UPDATE sessions_refresh SET revoque = true WHERE famille = $1")
+                .bind(famille)
+                .execute(&mut *tx)
+                .await
+                .map_err(mapper_erreur_sql)?;
+        }
+        tx.commit().await.map_err(mapper_erreur_sql)
+    }
+
+    async fn session_active(&self, famille: Uuid, id: Uuid) -> Result<bool, RepoError> {
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM sessions_refresh WHERE famille = $1 AND utilisateur_id = $2 AND NOT revoque AND NOT consomme AND expire_le > now())")
+            .bind(famille).bind(id).fetch_one(&self.pool).await.map_err(mapper_erreur_sql)
+    }
     async fn creer(
         &self,
         pseudo: &str,
@@ -307,6 +396,137 @@ fn mapper_erreur_sql(e: sqlx::Error) -> RepoError {
 mod tests {
     use super::*;
     use crate::infrastructure::db;
+
+    #[tokio::test]
+    async fn sessions_rotation_atomique_expiration_revocation_et_version() {
+        let pool = pool_de_test().await;
+        let repo = PgUtilisateurRepository::new(pool.clone());
+        let pseudo = identifiant_unique("session");
+        let user = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+        let famille = Uuid::new_v4();
+        let old = Uuid::new_v4().to_string();
+        let next = Uuid::new_v4().to_string();
+        let other = Uuid::new_v4().to_string();
+        repo.creer_session(user.id, user.version_auth, famille, &old)
+            .await
+            .unwrap();
+        assert!(repo.session_active(famille, user.id).await.unwrap());
+        let (a, b) = tokio::join!(
+            repo.renouveler_session(&old, &next),
+            repo.renouveler_session(&old, &other)
+        );
+        assert_eq!(
+            [a.as_ref().unwrap().is_some(), b.as_ref().unwrap().is_some()]
+                .iter()
+                .filter(|v| **v)
+                .count(),
+            1
+        );
+        let current = if a.unwrap().is_some() { &next } else { &other };
+        assert!(repo
+            .renouveler_session(&old, "replay")
+            .await
+            .unwrap()
+            .is_none());
+        repo.revoquer_session(&old).await.unwrap();
+        assert!(!repo.session_active(famille, user.id).await.unwrap());
+        assert!(repo
+            .renouveler_session(current, "revoked")
+            .await
+            .unwrap()
+            .is_none());
+        repo.revoquer_session("unknown").await.unwrap();
+        assert!(repo
+            .renouveler_session("unknown", "none")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(repo
+            .creer_session(
+                user.id,
+                user.version_auth + 1,
+                Uuid::new_v4(),
+                "wrong-version"
+            )
+            .await
+            .is_err());
+
+        let expired = Uuid::new_v4().to_string();
+        let expired_family = Uuid::new_v4();
+        repo.creer_session(user.id, user.version_auth, expired_family, &expired)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE sessions_refresh SET expire_le = now() - interval '1 second' WHERE hache = $1",
+        )
+        .bind(&expired)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(repo
+            .renouveler_session(&expired, "expired-next")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(!repo.session_active(expired_family, user.id).await.unwrap());
+        let valid = Uuid::new_v4().to_string();
+        repo.creer_session(user.id, user.version_auth, Uuid::new_v4(), &valid)
+            .await
+            .unwrap();
+        repo.invalider_sessions(user.id).await.unwrap();
+        assert!(repo
+            .renouveler_session(&valid, "version-next")
+            .await
+            .unwrap()
+            .is_none());
+        repo.supprimer(user.id).await.unwrap();
+        assert!(repo
+            .renouveler_session(&valid, "deleted-next")
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn sessions_erreurs_sql_et_rollback_rotation() {
+        let pool = pool_de_test().await;
+        let repo = PgUtilisateurRepository::new(pool.clone());
+        let pseudo = identifiant_unique("rollback");
+        let user = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+        let old = Uuid::new_v4().to_string();
+        repo.creer_session(user.id, user.version_auth, Uuid::new_v4(), &old)
+            .await
+            .unwrap();
+        assert!(repo.renouveler_session(&old, &old).await.is_err());
+        assert!(repo
+            .renouveler_session(&old, &Uuid::new_v4().to_string())
+            .await
+            .unwrap()
+            .is_some());
+        assert!(repo
+            .creer_session(user.id, user.version_auth, Uuid::new_v4(), &old)
+            .await
+            .is_err());
+        assert!(repo
+            .creer_session(Uuid::new_v4(), 0, Uuid::new_v4(), "absent")
+            .await
+            .is_err());
+        repo.supprimer(user.id).await.unwrap();
+        pool.close().await;
+        assert!(repo
+            .creer_session(user.id, 0, Uuid::new_v4(), "closed")
+            .await
+            .is_err());
+        assert!(repo.renouveler_session("closed", "new").await.is_err());
+        assert!(repo.revoquer_session("closed").await.is_err());
+        assert!(repo.session_active(Uuid::new_v4(), user.id).await.is_err());
+    }
 
     async fn pool_de_test() -> PgPool {
         let url = {

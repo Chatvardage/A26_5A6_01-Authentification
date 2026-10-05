@@ -50,3 +50,16 @@ Les migrations appartiennent à ce dépôt (`prisma/` lorsqu’applicable); Infr
 - [API et événements](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/main/docs/api/README.md)
 - [Scénario de validation](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/main/docs/validation.md)
 - [Versions et publication](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/main/docs/versions.md)
+
+## Sessions renouvelables
+
+Login/register ajoutent `refresh_token` à leur réponse existante. Les nouveaux JWT
+d'accès durent 15 minutes; les refresh tokens opaques sont hachés (SHA-256) dans
+PostgreSQL. `POST /api/auth/refresh` consomme et remplace atomiquement un refresh
+token. La famille expire après 30 jours, sans prolongation par rotation.
+`POST /api/auth/logout` révoque la famille à partir d'un token courant ou consommé.
+Les deux routes utilisent `{ "refresh_token": "<opaque>" }` sans Bearer et passent
+par le Gateway. Logout-all et changement de mot de passe invalident aussi les
+refresh tokens via `version_auth`. Aucun changement Compose ni nouveau secret
+n'est nécessaire : appliquer la nouvelle migration Prisma au démarrage.
+Voir le [contrat central](../A26_5A6_01-Infra/docs/api/authentification.md#sessions-renouvelables--register-login-refresh-et-logout).

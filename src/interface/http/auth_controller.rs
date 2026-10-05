@@ -15,6 +15,21 @@ use crate::state::AppState;
 use super::extracteurs::Json;
 use super::middleware::UtilisateurAuthentifie;
 
+pub async fn refresh(
+    State(state): State<AppState>,
+    Json(requete): Json<crate::application::dto::RefreshRequest>,
+) -> Result<ReponseJson<AuthResponse>, AppError> {
+    Ok(ReponseJson(state.auth_service.renouveler(requete).await?))
+}
+
+pub async fn logout(
+    State(state): State<AppState>,
+    Json(requete): Json<crate::application::dto::RefreshRequest>,
+) -> Result<StatusCode, AppError> {
+    state.auth_service.deconnecter(requete).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// POST /api/auth/register
 pub async fn register(
     State(state): State<AppState>,

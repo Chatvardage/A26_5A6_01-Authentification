@@ -211,6 +211,58 @@ fn lire_var_numerique<T: std::str::FromStr>(nom: &str, defaut: T) -> T {
 mod tests {
     use super::*;
 
+    #[test]
+    fn notifications_production_exigent_un_jeton_solide() {
+        assert!(probleme_jeton_interne(None).unwrap().contains("absent"));
+        assert!(probleme_jeton_interne(Some("chatvardage_internal_dev"))
+            .unwrap()
+            .contains("développement"));
+        assert!(probleme_jeton_interne(Some("court"))
+            .unwrap()
+            .contains("32"));
+        assert_eq!(probleme_jeton_interne(Some(SECRET_VALIDE)), None);
+        avec_env(
+            &[
+                ("NODE_ENV", Some("production")),
+                ("DATABASE_URL", Some("postgres://u:strong-password@h/b")),
+                ("JWT_SECRET", Some(SECRET_VALIDE)),
+                (
+                    "SERVICES_COMPTE_SUPPRIME_URLS",
+                    Some(" http://room , , http://messages "),
+                ),
+                ("INTERNAL_SERVICE_TOKEN", Some(SECRET_VALIDE)),
+            ],
+            || {
+                let config = Config::depuis_variables_environnement();
+                assert_eq!(
+                    config.services_compte_supprime,
+                    ["http://room", "http://messages"]
+                );
+                assert_eq!(config.jeton_interne.as_deref(), Some(SECRET_VALIDE));
+            },
+        );
+    }
+
+    #[test]
+    fn valeurs_numeriques_invalides_repli_avec_journalisation_active() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(std::io::sink)
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            avec_env(
+                &[
+                    ("PORT", Some("invalid")),
+                    ("JWT_DUREE_DE_VIE_HEURES", Some("invalid")),
+                ],
+                || {
+                    assert_eq!(lire_var_numerique("PORT", 3001u16), 3001);
+                    assert_eq!(lire_var_numerique("JWT_DUREE_DE_VIE_HEURES", 24i64), 24);
+                },
+            );
+        });
+    }
+
     // `std::env` est un état global partagé par tout le process : sans
     // ce verrou, les tests de ce module (exécutés en parallèle par
     // défaut par `cargo test`) se marcheraient dessus.

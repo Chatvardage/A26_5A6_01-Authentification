@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use sha2::{Digest, Sha256};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 use validator::Validate;
@@ -34,6 +35,63 @@ pub struct AuthService {
 }
 
 impl AuthService {
+    async fn ouvrir_session(
+        &self,
+        utilisateur: crate::domain::utilisateur::Utilisateur,
+    ) -> Result<AuthResponse, AppError> {
+        let famille = Uuid::new_v4();
+        let refresh_token = nouveau_refresh();
+        let jeton = self
+            .jwt
+            .generer_session(utilisateur.id, utilisateur.version_auth, famille)?;
+        self.depot
+            .creer_session(
+                utilisateur.id,
+                utilisateur.version_auth,
+                famille,
+                &hacher_refresh(&refresh_token),
+            )
+            .await
+            .map_err(mapper_erreur_depot)?;
+        Ok(AuthResponse {
+            jeton,
+            refresh_token,
+            utilisateur: UtilisateurPublic::from(utilisateur),
+        })
+    }
+
+    pub async fn renouveler(
+        &self,
+        requete: super::dto::RefreshRequest,
+    ) -> Result<AuthResponse, AppError> {
+        valider_refresh(&requete)?;
+        let refresh_token = nouveau_refresh();
+        let (utilisateur, famille) = self
+            .depot
+            .renouveler_session(
+                &hacher_refresh(&requete.refresh_token),
+                &hacher_refresh(&refresh_token),
+            )
+            .await
+            .map_err(mapper_erreur_depot)?
+            .ok_or_else(|| AppError::NonAutorise("session invalide ou expirée".into()))?;
+        let jeton = self
+            .jwt
+            .generer_session(utilisateur.id, utilisateur.version_auth, famille)?;
+        Ok(AuthResponse {
+            jeton,
+            refresh_token,
+            utilisateur: UtilisateurPublic::from(utilisateur),
+        })
+    }
+
+    pub async fn deconnecter(&self, requete: super::dto::RefreshRequest) -> Result<(), AppError> {
+        valider_refresh(&requete)?;
+        self.depot
+            .revoquer_session(&hacher_refresh(&requete.refresh_token))
+            .await
+            .map_err(mapper_erreur_depot)
+    }
     pub fn new(depot: Arc<dyn UtilisateurRepositoryPort>, jwt: Arc<JwtService>) -> Self {
         Self { depot, jwt }
     }
@@ -52,13 +110,7 @@ impl AuthService {
             .await
             .map_err(mapper_erreur_depot)?;
 
-        let jeton = self
-            .jwt
-            .generer_token(utilisateur.id, utilisateur.version_auth)?;
-        Ok(AuthResponse {
-            jeton,
-            utilisateur: UtilisateurPublic::from(utilisateur),
-        })
+        self.ouvrir_session(utilisateur).await
     }
 
     /// `POST /api/users` : un administrateur crée un compte standard. Son
@@ -129,13 +181,7 @@ impl AuthService {
             .filter(|_| mot_de_passe_valide)
             .ok_or_else(|| AppError::NonAutorise("identifiant ou mot de passe invalide".into()))?;
 
-        let jeton = self
-            .jwt
-            .generer_token(utilisateur.id, utilisateur.version_auth)?;
-        Ok(AuthResponse {
-            jeton,
-            utilisateur: UtilisateurPublic::from(utilisateur),
-        })
+        self.ouvrir_session(utilisateur).await
     }
 
     /// `PATCH /api/auth/me` : modifie son propre profil (pseudo et/ou mot de
@@ -300,6 +346,20 @@ impl AuthService {
 /// volontairement sensible à la casse.
 fn normaliser_courriel(courriel: &str) -> String {
     courriel.trim().to_lowercase()
+}
+
+fn nouveau_refresh() -> String {
+    format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+}
+pub(crate) fn hacher_refresh(token: &str) -> String {
+    format!("{:x}", Sha256::digest(token.as_bytes()))
+}
+fn valider_refresh(requete: &super::dto::RefreshRequest) -> Result<(), AppError> {
+    requete.validate().map_err(AppError::Validation)?;
+    if !requete.refresh_token.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return Err(AppError::Requete("refresh token invalide".into()));
+    }
+    Ok(())
 }
 
 /// Hachage Argon2 valide mais rattaché à aucun compte réel, utilisé par

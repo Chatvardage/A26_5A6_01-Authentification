@@ -34,6 +34,8 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
     let api_auth = Router::new()
         .route("/register", post(auth_controller::register))
         .route("/login", post(auth_controller::login))
+        .route("/refresh", post(auth_controller::refresh))
+        .route("/logout", post(auth_controller::logout))
         .route("/logout-all", post(auth_controller::deconnexion_partout))
         .route(
             "/me",
@@ -185,6 +187,231 @@ mod tests {
     use crate::infrastructure::jwt::{Claims, JwtService};
     use crate::infrastructure::notificateur_suppression::NotificateurEnregistreur;
 
+    #[tokio::test]
+    async fn echec_creation_session_et_reprise_login() {
+        let ctx = nouveau_contexte();
+        ctx.depot_concret.provoquer_erreur_interne_apres(1);
+        let body = json!({"pseudo":"recover_user","courriel":"recover@example.com","mot_de_passe":"password-fixture"});
+        assert_eq!(
+            requete(&ctx.app, "POST", "/api/auth/register", None, Some(body))
+                .await
+                .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        // La panne différée du fake reste active jusqu'à reconfiguration.
+        // Autoriser les deux opérations de login (lecture + création de session).
+        ctx.depot_concret.provoquer_erreur_interne_apres(2);
+        let (status, session) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({"identifiant":"recover_user","mot_de_passe":"password-fixture"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        ctx.depot_concret.provoquer_erreur_interne_apres(1);
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "GET",
+                "/api/auth/me",
+                session["jeton"].as_str(),
+                None
+            )
+            .await
+            .0,
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+    }
+
+    #[tokio::test]
+    async fn session_rotation_logout_et_compatibilite() {
+        let ctx = nouveau_contexte();
+        let (_, initial) = requete(&ctx.app, "POST", "/api/auth/register", None,
+            Some(json!({"pseudo":"refresh_user", "courriel":"refresh@example.com", "mot_de_passe":"password-fixture"}))).await;
+        let old = initial["refresh_token"].as_str().unwrap();
+        assert_eq!(old.len(), 64);
+        let (status, renewed) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/refresh",
+            None,
+            Some(json!({"refresh_token":old})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_ne!(renewed["jeton"], initial["jeton"]);
+        assert_ne!(renewed["refresh_token"], initial["refresh_token"]);
+        let token = renewed["jeton"].as_str().unwrap();
+        assert_eq!(
+            requete(&ctx.app, "GET", "/api/auth/me", Some(token), None)
+                .await
+                .0,
+            StatusCode::OK
+        );
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(json!({"refresh_token":old}))
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        // A consumed credential can revoke its family, even after a concurrent rotation.
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/logout",
+                None,
+                Some(json!({"refresh_token":old}))
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            requete(&ctx.app, "GET", "/api/auth/me", Some(token), None)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(json!({"refresh_token":renewed["refresh_token"]}))
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/logout",
+                None,
+                Some(json!({"refresh_token":old}))
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+    }
+
+    #[tokio::test]
+    async fn refresh_entrees_erreurs_et_revocation_globale() {
+        let ctx = nouveau_contexte();
+        for body in [
+            json!({}),
+            json!({"refresh_token":"short"}),
+            json!({"refresh_token":"x".repeat(64)}),
+            json!({"refresh_token":"a".repeat(64),"extra":true}),
+        ] {
+            for path in ["/api/auth/refresh", "/api/auth/logout"] {
+                assert_eq!(
+                    requete(&ctx.app, "POST", path, None, Some(body.clone()))
+                        .await
+                        .0,
+                    StatusCode::BAD_REQUEST
+                );
+            }
+        }
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(json!({"refresh_token":"a".repeat(64)}))
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/logout",
+                None,
+                Some(json!({"refresh_token":"a".repeat(64)}))
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        let (_, initial) = requete(&ctx.app, "POST", "/api/auth/register", None,
+            Some(json!({"pseudo":"revocation_user", "courriel":"revocation@example.com", "mot_de_passe":"password-fixture"}))).await;
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/logout-all",
+                initial["jeton"].as_str(),
+                None
+            )
+            .await
+            .0,
+            StatusCode::NO_CONTENT
+        );
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(json!({"refresh_token":initial["refresh_token"]}))
+            )
+            .await
+            .0,
+            StatusCode::UNAUTHORIZED
+        );
+        ctx.depot_concret.provoquer_erreur_interne(true);
+        for path in ["/api/auth/refresh", "/api/auth/logout"] {
+            assert_eq!(
+                requete(
+                    &ctx.app,
+                    "POST",
+                    path,
+                    None,
+                    Some(json!({"refresh_token":initial["refresh_token"]}))
+                )
+                .await
+                .0,
+                StatusCode::INTERNAL_SERVER_ERROR
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_concurrent_consomme_une_seule_fois() {
+        let ctx = nouveau_contexte();
+        let (_, initial) = requete(&ctx.app, "POST", "/api/auth/register", None,
+            Some(json!({"pseudo":"parallel_user", "courriel":"parallel@example.com", "mot_de_passe":"password-fixture"}))).await;
+        let body = json!({"refresh_token":initial["refresh_token"]});
+        let (a, b) = tokio::join!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/auth/refresh",
+                None,
+                Some(body.clone())
+            ),
+            requete(&ctx.app, "POST", "/api/auth/refresh", None, Some(body))
+        );
+        assert!([a.0, b.0].contains(&StatusCode::OK));
+        assert!([a.0, b.0].contains(&StatusCode::UNAUTHORIZED));
+    }
+
     /// Environnement de test : garde une référence concrète au dépôt
     /// (`depot_concret`) en plus de celle (dynamique) injectée dans
     /// `AppState`, pour pouvoir promouvoir un compte admin directement
@@ -192,6 +419,7 @@ mod tests {
     /// hors API) et déclencher `provoquer_erreur_interne` dans les tests
     /// de la branche 500.
     struct Contexte {
+        state: AppState,
         app: Router,
         depot_concret: Arc<FakeUtilisateurRepository>,
         secret: String,
@@ -222,11 +450,197 @@ mod tests {
             notificateur_suppression: notificateur.clone(),
         };
         Contexte {
-            app: construire(state, None),
+            app: construire(state.clone(), None),
+            state,
             depot_concret,
             secret,
             notificateur,
         }
+    }
+
+    #[tokio::test]
+    async fn suppression_entre_extraction_et_handler_retourne_une_erreur() {
+        use super::auth_controller::deconnexion_partout;
+        use crate::domain::utilisateur::UtilisateurPublic;
+        use crate::interface::http::middleware::UtilisateurAuthentifie;
+        let ctx = nouveau_contexte();
+        let user = ctx
+            .depot_concret
+            .creer("deleted_race", "deleted_race@example.com", "hash")
+            .await
+            .unwrap();
+        let session = UtilisateurAuthentifie {
+            id_utilisateur: user.id,
+            pseudo: user.pseudo.clone(),
+            role: user.role(),
+            utilisateur: UtilisateurPublic::from(user.clone()),
+        };
+        ctx.depot_concret.supprimer(user.id).await.unwrap();
+        assert!(matches!(
+            ctx.state
+                .auth_service
+                .modifier_profil(
+                    user.id,
+                    crate::application::dto::ModifierProfilRequest {
+                        pseudo: Some("new_pseudo".into()),
+                        mot_de_passe: None,
+                        mot_de_passe_actuel: None,
+                    }
+                )
+                .await,
+            Err(AppError::Introuvable(_))
+        ));
+        assert!(matches!(
+            deconnexion_partout(State(ctx.state.clone()), session).await,
+            Err(AppError::NonAutorise(_))
+        ));
+        let edit = crate::application::dto::ModifierProfilRequest {
+            pseudo: None,
+            mot_de_passe: Some("new-password".into()),
+            mot_de_passe_actuel: Some("password-fixture".into()),
+        };
+        assert!(matches!(
+            ctx.state.auth_service.modifier_profil(user.id, edit).await,
+            Err(AppError::Introuvable(_))
+        ));
+        assert!(matches!(
+            ctx.state
+                .auth_service
+                .supprimer_compte(
+                    user.id,
+                    crate::application::dto::SupprimerCompteRequest {
+                        mot_de_passe_actuel: "password-fixture".into()
+                    }
+                )
+                .await,
+            Err(AppError::Introuvable(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn changement_concurrent_du_mot_de_passe_empeche_la_modification_de_profil() {
+        let ctx = nouveau_contexte();
+        let (_, token) = inscrire(
+            &ctx.app,
+            "profile_race",
+            "profile_race@example.com",
+            "password-fixture",
+        )
+        .await;
+        ctx.depot_concret
+            .provoquer_changement_mot_de_passe_avant_modification();
+        let (status, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&token),
+            Some(json!({
+                "mot_de_passe":"new-password", "mot_de_passe_actuel":"password-fixture"
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            requete(&ctx.app, "GET", "/api/auth/me", Some(&token), None)
+                .await
+                .0,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn pannes_apres_authentification_respectent_le_contrat_500() {
+        let ctx = nouveau_contexte();
+        let (id, _) = inscrire(
+            &ctx.app,
+            "admin_errors",
+            "admin_errors@example.com",
+            "password-fixture",
+        )
+        .await;
+        let token = promouvoir_admin_et_relogin(&ctx, id, "admin_errors", "password-fixture").await;
+        let (target, _) = inscrire(
+            &ctx.app,
+            "target_errors",
+            "target_errors@example.com",
+            "password-fixture",
+        )
+        .await;
+        // JWT avec famille : deux lectures (utilisateur + session) avant chaque handler.
+        for (method, path, body, reads) in [
+            (
+                "POST",
+                "/api/users".to_string(),
+                Some(
+                    json!({"pseudo":"new_user", "courriel":"new_user@example.com", "mot_de_passe":"password-fixture"}),
+                ),
+                2,
+            ),
+            ("GET", "/api/users".to_string(), None, 2),
+            ("GET", format!("/api/users/{target}"), None, 2),
+            ("GET", format!("/api/users/lookup?ids={target}"), None, 2),
+            ("GET", "/api/users/search?q=target".to_string(), None, 2),
+            ("DELETE", format!("/api/users/{target}"), None, 2),
+            (
+                "PATCH",
+                format!("/api/users/{target}/role"),
+                Some(json!({"role":"admin"})),
+                2,
+            ),
+            (
+                "PATCH",
+                format!("/api/users/{target}/role"),
+                Some(json!({"role":"admin"})),
+                3,
+            ),
+            ("POST", "/api/auth/logout-all".to_string(), None, 2),
+            (
+                "PATCH",
+                "/api/auth/me".to_string(),
+                Some(
+                    json!({"mot_de_passe":"new-password", "mot_de_passe_actuel":"password-fixture"}),
+                ),
+                2,
+            ),
+            (
+                "PATCH",
+                "/api/auth/me".to_string(),
+                Some(
+                    json!({"mot_de_passe":"new-password", "mot_de_passe_actuel":"password-fixture"}),
+                ),
+                3,
+            ),
+            (
+                "DELETE",
+                "/api/auth/me".to_string(),
+                Some(json!({"mot_de_passe_actuel":"password-fixture"})),
+                2,
+            ),
+            (
+                "DELETE",
+                "/api/auth/me".to_string(),
+                Some(json!({"mot_de_passe_actuel":"password-fixture"})),
+                3,
+            ),
+        ] {
+            ctx.depot_concret.provoquer_erreur_interne_apres(reads);
+            let (status, response) = requete(&ctx.app, method, &path, Some(&token), body).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{method} {path}");
+            assert!(response["erreur"].is_string());
+        }
+        ctx.depot_concret.provoquer_erreur_interne(false);
+        assert_eq!(
+            requete(
+                &ctx.app,
+                "POST",
+                "/api/users",
+                Some(&token),
+                Some(json!({"pseudo":"a","courriel":"invalid","mot_de_passe":"short"}))
+            )
+            .await
+            .0,
+            StatusCode::BAD_REQUEST
+        );
     }
 
     /// Envoie une requête au `Router` et retourne `(statut, corps_json)`.
@@ -851,7 +1265,9 @@ mod tests {
         let ctx = nouveau_contexte();
         // Durée de vie négative : le jeton est expiré dès sa création.
         let service_expire = JwtService::new(ctx.secret.clone(), -1);
-        let jeton = service_expire.generer_token(Uuid::new_v4(), 0).unwrap();
+        let jeton = service_expire
+            .generer_token(Uuid::new_v4(), 0, None)
+            .unwrap();
 
         let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
         assert_eq!(statut, StatusCode::UNAUTHORIZED);
@@ -864,6 +1280,8 @@ mod tests {
             &ctx,
             Claims {
                 sub: "pas-un-uuid".into(),
+                sid: None,
+                jti: None,
                 version_auth: 0,
                 exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp() as usize,
             },

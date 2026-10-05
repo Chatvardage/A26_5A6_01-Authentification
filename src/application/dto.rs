@@ -103,7 +103,15 @@ pub struct ConnexionRequest {
 #[derive(Debug, Serialize)]
 pub struct AuthResponse {
     pub jeton: String,
+    pub refresh_token: String,
     pub utilisateur: UtilisateurPublic,
+}
+
+#[derive(Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct RefreshRequest {
+    #[validate(length(min = 64, max = 64, message = "refresh token invalide"))]
+    pub refresh_token: String,
 }
 
 #[derive(Debug, Deserialize)]

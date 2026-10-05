@@ -55,10 +55,25 @@ model Utilisateur {
   // (`SET modifie_le = now()`) à chaque UPDATE.
   cree_le            DateTime @default(now()) @db.Timestamptz
   modifie_le         DateTime @default(now()) @db.Timestamptz
+  sessions           SessionRefresh[]
 
   // Créé par la migration `index_utilisateurs_cree_le` (GET /api/users trie
   // par cree_le DESC) : déclaré ici pour que Prisma ne propose pas de le
   // supprimer.
   @@index([cree_le(sort: Desc)], map: "utilisateurs_cree_le_idx")
   @@map("utilisateurs")
+}
+
+model SessionRefresh {
+  hache String @id
+  famille String @db.Uuid
+  utilisateur_id String @db.Uuid
+  utilisateur Utilisateur @relation(fields: [utilisateur_id], references: [id], onDelete: Cascade)
+  version_auth Int
+  expire_le DateTime @default(dbgenerated("(now() + interval '30 days')")) @db.Timestamptz
+  consomme Boolean @default(false)
+  revoque Boolean @default(false)
+  @@index([famille], map: "sessions_refresh_famille_idx")
+  @@index([expire_le], map: "sessions_refresh_expire_le_idx")
+  @@map("sessions_refresh")
 }

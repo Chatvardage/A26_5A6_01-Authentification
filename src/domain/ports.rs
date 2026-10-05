@@ -21,6 +21,22 @@ use super::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
 
 #[async_trait]
 pub trait UtilisateurRepositoryPort: Send + Sync {
+    async fn creer_session(
+        &self,
+        id: Uuid,
+        version: i32,
+        famille: Uuid,
+        hache: &str,
+    ) -> Result<(), RepoError>;
+    /// Consomme l'ancien hash une seule fois et insère son successeur dans la même transaction.
+    async fn renouveler_session(
+        &self,
+        ancien: &str,
+        nouveau: &str,
+    ) -> Result<Option<(Utilisateur, Uuid)>, RepoError>;
+    /// Un ancien token consommé permet encore de révoquer sa famille (logout concurrent au refresh).
+    async fn revoquer_session(&self, hache: &str) -> Result<(), RepoError>;
+    async fn session_active(&self, famille: Uuid, id: Uuid) -> Result<bool, RepoError>;
     async fn creer(
         &self,
         pseudo: &str,

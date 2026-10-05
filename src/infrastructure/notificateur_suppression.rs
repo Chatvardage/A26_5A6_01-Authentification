@@ -177,6 +177,7 @@ mod tests {
     }
 
     async fn service_factice(echecs: u32) -> (String, Recu) {
+        let _ = tracing_subscriber::fmt::try_init();
         let recu = Recu::default();
         *recu.echecs_restants.lock().unwrap() = echecs;
         let app = Router::new()
@@ -219,6 +220,7 @@ mod tests {
 
     #[tokio::test]
     async fn reessaie_puis_abandonne_un_service_en_panne() {
+        use tracing::instrument::WithSubscriber;
         let (url_ok, recu_ok) = service_factice(1).await;
         let (url_ko, recu_ko) = service_factice(10).await;
         let url_ko = url_ko.trim_end_matches('/').to_string();
@@ -232,6 +234,12 @@ mod tests {
             "secret".into(),
             Uuid::new_v4(),
             &SANS_ATTENTE,
+        )
+        .with_subscriber(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .with_writer(std::io::sink)
+                .finish(),
         )
         .await;
 

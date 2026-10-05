@@ -75,6 +75,52 @@ pub async fn verifier_mot_de_passe(clair: &str, hache: &str) -> Result<bool, App
 mod tests {
     use super::*;
 
+    #[test]
+    fn calculs_blocking_terminent_meme_apres_arret_du_runtime() {
+        use std::future::Future;
+        use std::task::{Context, Poll, Waker};
+        use std::time::Duration;
+        // Les calculs blocking continuent lors de shutdown_timeout : ne pas
+        // confondre cet arrêt avec une annulation ou perdre leur résultat.
+        // Occuper l'unique worker rend la mise en attente déterministe.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .max_blocking_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        let (started, ready) = std::sync::mpsc::channel();
+        let (release, blocked) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+        });
+        ready.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut hashing = Box::pin(hacher_mot_de_passe("password-fixture"));
+        let mut checking = Box::pin(verifier_mot_de_passe("password-fixture", "invalid"));
+        {
+            let _entered = runtime.enter();
+            let mut context = Context::from_waker(Waker::noop());
+            assert!(matches!(hashing.as_mut().poll(&mut context), Poll::Pending));
+            assert!(matches!(
+                checking.as_mut().poll(&mut context),
+                Poll::Pending
+            ));
+        }
+        runtime.shutdown_timeout(Duration::ZERO);
+        release.send(()).unwrap();
+        let remaining = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let hash = remaining.block_on(hashing).unwrap();
+        assert!(hash.starts_with("$argon2id$"));
+        assert!(!remaining.block_on(checking).unwrap());
+        assert!(remaining
+            .block_on(verifier_mot_de_passe("password-fixture", &hash))
+            .unwrap());
+    }
+
     #[tokio::test]
     async fn un_mot_de_passe_haché_se_vérifie_correctement() {
         let hache = hacher_mot_de_passe("motdepasse123")

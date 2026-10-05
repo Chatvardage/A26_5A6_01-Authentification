@@ -53,6 +53,7 @@ chrono = { version = "0.4", features = ["serde"] }
 # Hachage de mots de passe. Argon2 est l'algorithme recommandé
 # actuellement (plus robuste que bcrypt/md5 face aux attaques GPU).
 argon2 = "0.5"
+sha2 = "0.10"
 
 # Génération/validation des JSON Web Tokens (JWT) pour l'authentification.
 jsonwebtoken = "9"

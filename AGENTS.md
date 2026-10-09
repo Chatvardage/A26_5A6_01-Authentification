@@ -75,7 +75,7 @@ Ne jamais modifier une migration déjà appliquée pour masquer un changement. C
 Dans l'image Docker finale (sans npm/npx), utiliser :
 
 ```bash
-node node_modules/prisma/build/index.js migrate deploy
+./node_modules/.bin/prisma migrate deploy
 ```
 
 Le code Rust (`src/infrastructure/pg_utilisateur_repository.rs`) continue d'utiliser SQLx pour lire/écrire dans PostgreSQL — Prisma n'est jamais appelé comme client au runtime. Toute modification du schéma Prisma doit être répercutée dans ce fichier (et vice-versa), Prisma ne générant pas de code Rust.
@@ -164,16 +164,16 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 
 ## Docker
 
-Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `node node_modules/prisma/build/index.js migrate deploy` **au démarrage du conteneur**, puis démarre l'application. npm/npx sont retirés de l'image finale; ils restent disponibles au build et en développement. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
+Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `./node_modules/.bin/prisma migrate deploy` **au démarrage du conteneur**, puis démarre l'application. npm/npx sont retirés de l'image finale; ils restent disponibles au build et en développement. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
 
 ### Séquence attendue du Dockerfile
 
 Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
 
-1. **`builder`** (`rust:1.88.0-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
-2. **`node-deps`** (`node:22-trixie-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
-3. **Image finale** (`node:22-trixie-slim`, avec mises à jour Debian) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage, sans npm/npx ni curl. Le healthcheck utilise `fetch` de Node; le runtime tourne sous `node`.
-4. **`CMD`** : `node node_modules/prisma/build/index.js migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
+1. **`builder`** (`rust:1.88.0-alpine`) : compile le binaire Rust (`cargo build --release`).
+2. **`node-deps`** (`node:22-alpine`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:22-alpine`, avec mises à jour Alpine) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage, sans npm/npx ni curl. Le healthcheck utilise `fetch` de Node; le runtime tourne sous `node`.
+4. **`CMD`** : `./node_modules/.bin/prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
 
 Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.
 
@@ -280,3 +280,12 @@ Dans la description de PR, résumer les changements, indiquer les tests exécut�
 ## Documentation centrale
 
 Infra est la référence du démarrage complet, des architectures, contrats et scénarios de validation. Le README local décrit le dépôt et ses commandes; les guides détaillés sont dans `A26_5A6_01-Infra/docs/`. Toute modification de contrat doit mettre à jour la référence centrale et ses liens.
+
+### Reprise sécurité — review 6078856455
+
+- La lecture verrouillée du changement de rôle et son résultat utilisent uniquement le profil public; aucun hash ni version de session n’est chargé pour ce chemin. Appel est privé à son module.
+- L’image utilise un binaire musl et Node 22 Alpine mis à jour, avec CLI Prisma local stable et utilisateur non privilégié; le CI construit aussi cette image avec --pull.
+- Le sémaphore Argon2 reste limité à quatre places : il attend jusqu’à cinq secondes et les tests réels passent avec cette limite. Augmenter artificiellement sa capacité en test masquerait la protection mémoire/CPU.
+- L’historique AGENTS reste présent conformément à la consigne explicite utilisateur sur les reviews mixtes.
+- Le POST sessions_invalidees après suppression reste utile et fonctionne sans compte en base : il révoque les sockets même si le nettoyage DELETE échoue; le contrat central documente déjà ce cas.
+- Un argument hebdomadaire artificiel de cache n’est pas ajouté : --pull et apk upgrade s’appliquent aux reconstructions; le déploiement doit effectivement reconstruire les images pour recevoir les mises à jour.

@@ -62,3 +62,5 @@ jobs:
       - run: npm audit --audit-level=high
       - run: npx prisma migrate deploy
       - run: cargo test
+      # Valider aussi le binaire musl et les migrations CLI de l'image finale.
+      - run: docker build --pull -t chatvardage-auth:ci .

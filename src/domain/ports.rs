@@ -159,8 +159,8 @@ pub trait NotificateurSuppressionPort: Send + Sync {
 }
 
 pub enum ResultatChangementRole {
-    Modifie(Utilisateur),
-    Inchange(Utilisateur),
+    Modifie(crate::domain::utilisateur::UtilisateurPublic),
+    Inchange(crate::domain::utilisateur::UtilisateurPublic),
     CibleAdmin,
     Introuvable,
 }

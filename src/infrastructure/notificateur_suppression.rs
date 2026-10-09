@@ -23,7 +23,7 @@ const ATTENTES_ENTRE_TENTATIVES: [Duration; 2] = [Duration::from_secs(1), Durati
 
 /// Ce dont on prévient les services : route appelée et texte des journaux.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Appel {
+enum Appel {
     CompteSupprime,
     SessionsInvalidees,
 }

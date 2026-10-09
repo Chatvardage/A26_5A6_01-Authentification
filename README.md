@@ -75,8 +75,8 @@ Voir le [contrat central](../A26_5A6_01-Infra/docs/api/authentification.md#sessi
 
 Les calculs Argon2 partagent un sémaphore de quatre places (environ 76 Mio pour les calculs simultanés). Une attente supérieure à cinq secondes renvoie HTTP 503. Le permis reste détenu par la tâche CPU même si le client se déconnecte. La limitation par IP du Gateway reste nécessaire.
 
-L'image finale applique les mises à jour Debian disponibles et retire npm/npx après installation. Les migrations restent exécutées avant le serveur, via `node node_modules/prisma/build/index.js migrate deploy`, sans téléchargement au démarrage.
+L'image finale compile Rust avec musl, utilise Node 22 Alpine et applique les mises à jour système disponibles et retire npm/npx après installation. Les migrations restent exécutées avant le serveur, via `./node_modules/.bin/prisma migrate deploy`, sans téléchargement au démarrage.
 
 ### Limites connues
 
-L'audit Cargo sans exclusion signale `RUSTSEC-2023-0071` (`rsa`, dépendance SQLx/MySQL présente dans le lockfile). La configuration d'audit existante exclut cet avis : `cargo tree -e normal` confirme que `rsa` n'est pas compilée dans ce service PostgreSQL. Revoir cette exclusion si MySQL ou RSA est activé. Les alertes système résiduelles et les exigences de déploiement sont consignées dans `../A26_5A6_01-Infra/docs/audit-securite-2026-10-09.md`.
+L'audit Cargo sans exclusion signale `RUSTSEC-2023-0071` (`rsa`, dépendance SQLx/MySQL présente dans le lockfile). La configuration d'audit existante exclut cet avis : `cargo tree -e normal` confirme que `rsa` n'est pas compilée dans ce service PostgreSQL. Revoir cette exclusion si MySQL ou RSA est activé. Les alertes système résiduelles et les exigences de déploiement sont consignées dans [rapport initial Infra](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/audit-securite-2026-10-09.md).

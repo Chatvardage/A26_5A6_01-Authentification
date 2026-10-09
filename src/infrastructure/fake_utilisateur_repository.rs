@@ -441,12 +441,12 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
             return Ok(ResultatChangementRole::CibleAdmin);
         }
         if utilisateur.role == role.as_str() {
-            return Ok(ResultatChangementRole::Inchange(utilisateur.clone()));
+            return Ok(ResultatChangementRole::Inchange(utilisateur.clone().into()));
         }
         utilisateur.role = role.as_str().to_string();
         utilisateur.version_auth += 1;
         utilisateur.modifie_le = Utc::now();
-        Ok(ResultatChangementRole::Modifie(utilisateur.clone()))
+        Ok(ResultatChangementRole::Modifie(utilisateur.clone().into()))
     }
 
     async fn verifier_sante(&self) -> Result<(), RepoError> {

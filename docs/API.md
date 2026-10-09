@@ -6,3 +6,5 @@ Le contrat comprend aussi les sessions renouvelables :
 `POST /api/auth/refresh` et `POST /api/auth/logout`, corps JSON `{ "refresh_token": "<opaque>" }`,
 sans Bearer. Réponse refresh : `jeton`, `refresh_token`, `utilisateur`. Logout : 204.
 Voir la référence centrale liée ci-dessus pour rotation, expiration et révocation.
+
+Les opérations nécessitant Argon2 peuvent renvoyer 503 après cinq secondes d'attente lorsque les quatre places de calcul sont occupées. Voir la référence centrale.

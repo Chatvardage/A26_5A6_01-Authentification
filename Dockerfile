@@ -36,7 +36,7 @@ RUN touch src/main.rs && cargo build --release
 # Étape séparée du build Rust : le cache Docker ne réinstalle les
 # dépendances npm que si package.json/package-lock.json changent, pas à
 # chaque modification du code Rust.
-FROM node:22-bookworm-slim AS node-deps
+FROM node:22-trixie-slim AS node-deps
 
 WORKDIR /app
 
@@ -57,13 +57,12 @@ RUN DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
 
 # --- Étape 3 : image finale ----------------------------------------------
 # Basée sur Node.js (pas une image Debian minimale) : le conteneur doit
-# exécuter `npx prisma migrate deploy` au démarrage, avant de lancer le
+# exécuter `node node_modules/prisma/build/index.js migrate deploy` au démarrage, avant de lancer le
 # binaire Rust compilé à l'étape 1.
-FROM node:22-bookworm-slim
+FROM node:22-trixie-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -74,12 +73,15 @@ COPY package.json ./
 COPY prisma ./prisma
 
 # Ne pas tourner en root dans le conteneur final (principe du moindre
-# privilège) : `node:22-bookworm-slim` fournit déjà un utilisateur non
+# privilège) : `node:22-trixie-slim` fournit déjà un utilisateur non
 # privilégié prêt à l'emploi (uid 1000), inutile d'en créer un autre.
 # `chown` après les `COPY` ci-dessus : `node` doit pouvoir lire/exécuter
 # le binaire et lire `node_modules/`/`prisma/` (aucune écriture requise
 # au runtime — pas de volume monté, PostgreSQL est externe).
 RUN chown -R node:node /app
+# Les migrations utilisent le CLI local : aucun gestionnaire npm au runtime.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 USER node
 
 EXPOSE 3001
@@ -87,9 +89,9 @@ EXPOSE 3001
 # Utilisé par docker-compose (condition "service_healthy") pour savoir
 # quand l'API est prête à recevoir des requêtes.
 HEALTHCHECK --interval=5s --timeout=3s --start-period=10s --retries=5 \
-    CMD curl -f "http://localhost:${PORT:-3001}/health" || exit 1
+    CMD node -e "fetch('http://localhost:'+ (process.env.PORT || '3001') + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 # Migrer AVANT de démarrer, jamais l'inverse (voir AGENTS.md, section
 # Docker) : si la migration échoue, le conteneur s'arrête plutôt que de
 # démarrer une API pointant vers un schéma obsolète ou incomplet.
-CMD ["sh", "-c", "npx prisma migrate deploy && exec ./chatvardage-auth"]
+CMD ["sh", "-c", "node node_modules/prisma/build/index.js migrate deploy && exec ./chatvardage-auth"]

@@ -9,6 +9,9 @@ use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Algorithm, Argon2, Params, Version,
 };
+use std::sync::{Arc, LazyLock};
+use std::time::Duration;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::task;
 
 use crate::error::AppError;
@@ -16,6 +19,19 @@ use crate::error::AppError;
 const COUT_MEMOIRE_ARGON2_KIO: u32 = 19 * 1024;
 const ITERATIONS_ARGON2: u32 = 2;
 const PARALLELISME_ARGON2: u32 = 1;
+// Quatre calculs (~76 Mio), même si une attaque arrive depuis plusieurs IP.
+// Le permis reste dans la tâche blocking après une déconnexion du client.
+static CALCULS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(4)));
+
+async fn reserver_calcul(
+    limite: Arc<Semaphore>,
+    attente: Duration,
+) -> Result<OwnedSemaphorePermit, AppError> {
+    tokio::time::timeout(attente, limite.acquire_owned())
+        .await
+        .map_err(|_| AppError::ServiceIndisponible("authentification surchargée".into()))?
+        .map_err(|_| AppError::ServiceIndisponible("authentification indisponible".into()))
+}
 
 fn argon2() -> Argon2<'static> {
     // Paramètres Argon2id par défaut explicités : 19 Mio, deux itérations
@@ -36,8 +52,10 @@ fn argon2() -> Argon2<'static> {
 /// le même mot de passe auront des hashs différents en base, ce qui empêche
 /// une attaque par table précalculée (rainbow table).
 pub async fn hacher_mot_de_passe(clair: &str) -> Result<String, AppError> {
+    let permis = reserver_calcul(CALCULS.clone(), Duration::from_secs(5)).await?;
     let clair = clair.to_owned();
     task::spawn_blocking(move || {
+        let _permis = permis;
         let sel = SaltString::generate(&mut OsRng);
         let argon2 = argon2();
         let hache = argon2
@@ -53,9 +71,11 @@ pub async fn hacher_mot_de_passe(clair: &str) -> Result<String, AppError> {
 /// base sans bloquer un worker Tokio. Retourne `false` pour un mot de passe
 /// incorrect ou un hash invalide : ce sont des cas normaux.
 pub async fn verifier_mot_de_passe(clair: &str, hache: &str) -> Result<bool, AppError> {
+    let permis = reserver_calcul(CALCULS.clone(), Duration::from_secs(5)).await?;
     let clair = clair.to_owned();
     let hache = hache.to_owned();
     task::spawn_blocking(move || {
+        let _permis = permis;
         let Ok(hache_analyse) = PasswordHash::new(&hache) else {
             return Ok(false);
         };
@@ -74,6 +94,27 @@ pub async fn verifier_mot_de_passe(clair: &str, hache: &str) -> Result<bool, App
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn calculs_bornes_attente_limitee_et_permis_restitue() {
+        let limite = Arc::new(Semaphore::new(1));
+        let permis = reserver_calcul(limite.clone(), Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(matches!(
+            reserver_calcul(limite.clone(), Duration::from_millis(10)).await,
+            Err(AppError::ServiceIndisponible(_))
+        ));
+        drop(permis);
+        assert!(reserver_calcul(limite.clone(), Duration::from_millis(10))
+            .await
+            .is_ok());
+        limite.close();
+        assert!(matches!(
+            reserver_calcul(limite, Duration::from_millis(10)).await,
+            Err(AppError::ServiceIndisponible(_))
+        ));
+    }
 
     #[test]
     fn calculs_blocking_terminent_meme_apres_arret_du_runtime() {

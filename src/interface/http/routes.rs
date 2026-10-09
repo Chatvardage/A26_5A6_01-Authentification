@@ -2067,11 +2067,8 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
         assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id_alice]);
-        // Changement de rôle puis suppression : ses sessions, invalidées deux fois.
-        assert_eq!(
-            *ctx.notificateur.sessions.lock().unwrap(),
-            vec![id_alice, id_alice]
-        );
+        // Rôle identique puis suppression : seule la suppression invalide les sessions.
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id_alice]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -2881,5 +2878,28 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::OK);
         assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![cible]);
+    }
+
+    #[tokio::test]
+    async fn role_identique_ne_revoque_pas_les_sessions() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (cible, jeton) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{cible}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "utilisateur" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["role"], "utilisateur");
+        assert!(ctx.notificateur.sessions.lock().unwrap().is_empty());
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::OK);
     }
 }

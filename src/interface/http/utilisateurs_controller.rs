@@ -255,6 +255,9 @@ pub async fn changer_role(
         .map_err(|e| AppError::Interne(e.to_string()))?
     {
         ResultatChangementRole::Modifie(utilisateur) => utilisateur,
+        ResultatChangementRole::Inchange(utilisateur) => {
+            return Ok(ReponseJson(UtilisateurPublic::from(utilisateur)));
+        }
         ResultatChangementRole::CibleAdmin => {
             return Err(AppError::Interdit(
                 "le rôle d'un administrateur ne peut pas être modifié".into(),

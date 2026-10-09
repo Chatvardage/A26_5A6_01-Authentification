@@ -62,7 +62,7 @@ token. La famille expire après 30 jours, sans prolongation par rotation.
 `POST /api/auth/logout-others` fait de même puis renvoie une nouvelle session
 (`jeton`, `refresh_token`, `utilisateur`) à l'appareil qui le demande. Après un
 changement de mot de passe, une déconnexion (tous ou autres appareils) ou un
-changement de rôle, Authentification prévient les services de
+changement réel de rôle, Authentification prévient les services de
 `SERVICES_SESSIONS_REVOQUEES_URLS` (Message-Service ferme aussitôt les sockets
 dont le jeton est révoqué).
 Les deux routes utilisent `{ "refresh_token": "<opaque>" }` sans Bearer et passent

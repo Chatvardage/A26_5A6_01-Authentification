@@ -61,6 +61,8 @@ RUN DATABASE_URL=postgresql://placeholder:placeholder@localhost:5432/placeholder
 # binaire Rust compilé à l'étape 1.
 FROM node:22-trixie-slim
 
+# Prendre les correctifs disponibles à chaque rebuild : ce choix de sécurité
+# rend volontairement les paquets système dépendants de la date du build.
 RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*

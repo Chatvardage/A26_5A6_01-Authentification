@@ -440,6 +440,9 @@ impl UtilisateurRepositoryPort for FakeUtilisateurRepository {
         if utilisateur.role == Role::Admin.as_str() {
             return Ok(ResultatChangementRole::CibleAdmin);
         }
+        if utilisateur.role == role.as_str() {
+            return Ok(ResultatChangementRole::Inchange(utilisateur.clone()));
+        }
         utilisateur.role = role.as_str().to_string();
         utilisateur.version_auth += 1;
         utilisateur.modifie_le = Utc::now();

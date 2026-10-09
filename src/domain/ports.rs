@@ -160,6 +160,7 @@ pub trait NotificateurSuppressionPort: Send + Sync {
 
 pub enum ResultatChangementRole {
     Modifie(Utilisateur),
+    Inchange(Utilisateur),
     CibleAdmin,
     Introuvable,
 }

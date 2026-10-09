@@ -187,6 +187,17 @@ Le résultat (migration au démarrage, generate avant) est équivalent au patron
 
 Validation de cette review : changement documentaire uniquement; fmt, clippy, build release, audit npm, migrations sur une nouvelle base jetable, tests Rust et couverture 99,77 % des lignes hors main passent. Aucun changement d'image ou de logique applicative.
 
+### Nouvelle revue PR #10 — changement de rôle identique
+
+- Un rôle identique est reconnu sous le verrou PostgreSQL : réponse 200 avec le profil actuel, sans changer `version_auth` ni `modifie_le`, sans notification de révocation. Une promotion réelle conserve son invalidation; une cible déjà admin reste interdite. Tests PostgreSQL et HTTP couvrent la conservation du jeton.
+- Suppression du journal AGENTS non retenue : l'utilisateur exige ici les raisons des suggestions écartées dans ce même commit.
+- Compromis sécurité/reproductibilité des mises à jour système explicité dans le Dockerfile; aucune modification de ses commandes.
+- Permis Argon2 conservé jusqu'à la fin du calcul : le rendre à l'abandon du client permettrait de dépasser la limite CPU. Saturation bornée et contrôle de débit Gateway existent; ajouter un système d'alertes dépasse ce correctif sans besoin opérationnel concret.
+- Listes de notification distinctes conservées : suppression de données et révocation des sessions sont deux contrats différents. Un service de nettoyage n'a pas forcément de sessions à révoquer; Message-Service reçoit les deux dans Compose.
+- URL de base conservée dans les logs : identifiant et type d'appel déjà présents, aucune ambiguïté de transport démontrée. Pas de duplication uniquement pour le journal.
+
+Validation : fmt, clippy, build release et audit high passent; 184 tests Rust sur PostgreSQL migré et couverture des lignes 99,75 % hors main. Le test existant de rôle identique attend désormais uniquement la notification de suppression. Documentation centrale mise à jour dans une branche Infra distincte liée à cette review.
+
 ### Test en solo (ce dépôt seul)
 
 ```bash

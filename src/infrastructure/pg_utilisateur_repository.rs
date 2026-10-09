@@ -333,18 +333,21 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         role: Role,
     ) -> Result<ResultatChangementRole, RepoError> {
         let mut transaction = self.pool.begin().await.map_err(mapper_erreur_sql)?;
-        let role_actuel: Option<(String,)> =
-            sqlx::query_as("SELECT role FROM utilisateurs WHERE id = $1 FOR UPDATE")
+        let actuel: Option<Utilisateur> =
+            sqlx::query_as("SELECT id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le FROM utilisateurs WHERE id = $1 FOR UPDATE")
                 .bind(id)
                 .fetch_optional(&mut *transaction)
                 .await
                 .map_err(mapper_erreur_sql)?;
 
-        let Some((role_actuel,)) = role_actuel else {
+        let Some(actuel) = actuel else {
             return Ok(ResultatChangementRole::Introuvable);
         };
-        if role_actuel == Role::Admin.as_str() {
+        if actuel.role == Role::Admin.as_str() {
             return Ok(ResultatChangementRole::CibleAdmin);
+        }
+        if actuel.role == role.as_str() {
+            return Ok(ResultatChangementRole::Inchange(actuel));
         }
 
         let utilisateur = sqlx::query_as::<_, Utilisateur>(
@@ -921,6 +924,29 @@ mod tests {
                 .unwrap(),
             ResultatChangementRole::Introuvable
         ));
+    }
+
+    #[tokio::test]
+    async fn role_identique_preserve_la_version_et_la_date() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("roleinchange");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+        let resultat = repo
+            .changer_role_si_non_admin(cree.id, Role::Utilisateur)
+            .await
+            .unwrap();
+        let ResultatChangementRole::Inchange(inchange) = resultat else {
+            panic!("un rôle identique ne doit pas invalider les sessions");
+        };
+        assert_eq!(inchange.version_auth, cree.version_auth);
+        assert_eq!(inchange.modifie_le, cree.modifie_le);
+        let relu = repo.trouver_par_id(cree.id).await.unwrap().unwrap();
+        assert_eq!(relu.version_auth, cree.version_auth);
+        assert_eq!(relu.modifie_le, cree.modifie_le);
+        repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]

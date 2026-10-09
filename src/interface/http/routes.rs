@@ -37,6 +37,7 @@ pub fn construire(state: AppState, origines_autorisees: Option<&[String]>) -> Ro
         .route("/refresh", post(auth_controller::refresh))
         .route("/logout", post(auth_controller::logout))
         .route("/logout-all", post(auth_controller::deconnexion_partout))
+        .route("/logout-others", post(auth_controller::deconnexion_autres))
         .route(
             "/me",
             get(auth_controller::me)
@@ -1672,6 +1673,7 @@ mod tests {
         assert_eq!(statut, StatusCode::NO_CONTENT);
         // Les autres services sont prévenus, une seule fois.
         assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id]);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -2065,6 +2067,8 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
         assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id_alice]);
+        // Rôle identique puis suppression : seule la suppression invalide les sessions.
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id_alice]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -2710,5 +2714,213 @@ mod tests {
         ctx.depot_concret.provoquer_erreur_interne(true);
         let (statut, _) = chercher(&ctx, &jeton, "?q=a").await;
         assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn deconnexion_des_autres_garde_seulement_l_appareil_courant() {
+        let ctx = nouveau_contexte();
+        let (id, jeton_a) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // Un second appareil connecté.
+        let (_, autre) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice", "mot_de_passe": "motdepasse123" })),
+        )
+        .await;
+        let jeton_b = autre["jeton"].as_str().unwrap().to_string();
+        let refresh_b = autre["refresh_token"].as_str().unwrap().to_string();
+
+        let (statut, nouvelle) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/logout-others",
+            Some(&jeton_a),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(nouvelle["utilisateur"]["id"], id.to_string());
+        let jeton_c = nouvelle["jeton"].as_str().unwrap();
+        let refresh_c = nouvelle["refresh_token"].as_str().unwrap();
+
+        // Anciens jetons (les deux appareils) refusés, refresh de l'autre appareil aussi.
+        for jeton in [&jeton_a, &jeton_b] {
+            let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(jeton), None).await;
+            assert_eq!(statut, StatusCode::UNAUTHORIZED);
+        }
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/refresh",
+            None,
+            Some(json!({ "refresh_token": refresh_b })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+        // La nouvelle session de l'appareil courant est valide et renouvelable.
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(jeton_c), None).await;
+        assert_eq!(statut, StatusCode::OK);
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/refresh",
+            None,
+            Some(json!({ "refresh_token": refresh_c })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
+    }
+
+    #[tokio::test]
+    async fn deconnexion_des_autres_exige_un_jeton_et_gere_les_erreurs() {
+        let ctx = nouveau_contexte();
+        let (statut, _) = requete(&ctx.app, "POST", "/api/auth/logout-others", None, None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+
+        let (_, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // L'authentification lit le dépôt une fois ; l'invalidation échoue.
+        ctx.depot_concret.provoquer_erreur_interne_apres(1);
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/logout-others",
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(ctx.notificateur.sessions.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn deconnexion_des_autres_notifie_si_la_relecture_echoue_apres_invalidation() {
+        let ctx = nouveau_contexte();
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // Les deux lectures Auth et l’invalidation réussissent; la relecture échoue.
+        ctx.depot_concret.provoquer_erreur_interne_apres(3);
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/logout-others",
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
+        ctx.depot_concret.provoquer_erreur_interne(false);
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn deconnexion_des_autres_d_un_compte_supprime_entre_temps() {
+        use super::auth_controller::deconnexion_autres;
+        use crate::interface::http::middleware::UtilisateurAuthentifie;
+        let ctx = nouveau_contexte();
+        let user = ctx
+            .depot_concret
+            .creer("parti", "parti@example.com", "hash")
+            .await
+            .unwrap();
+        let session = UtilisateurAuthentifie {
+            id_utilisateur: user.id,
+            utilisateur: crate::domain::utilisateur::UtilisateurPublic::from(user.clone()),
+            pseudo: user.pseudo.clone(),
+            role: user.role(),
+        };
+        ctx.depot_concret.supprimer(user.id).await.unwrap();
+        let resultat = deconnexion_autres(axum::extract::State(ctx.state.clone()), session).await;
+        assert!(matches!(resultat, Err(AppError::NonAutorise(_))));
+    }
+
+    #[tokio::test]
+    async fn mot_de_passe_change_et_deconnexion_partout_previennent_message_service() {
+        let ctx = nouveau_contexte();
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // Pseudo seul : les jetons restent valides, rien à signaler.
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(json!({ "pseudo": "alice2" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert!(ctx.notificateur.sessions.lock().unwrap().is_empty());
+
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            "/api/auth/me",
+            Some(&jeton),
+            Some(
+                json!({ "mot_de_passe": "nouveaumdp123", "mot_de_passe_actuel": "motdepasse123" }),
+            ),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
+
+        let (_, corps) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/login",
+            None,
+            Some(json!({ "identifiant": "alice2", "mot_de_passe": "nouveaumdp123" })),
+        )
+        .await;
+        let jeton = corps["jeton"].as_str().unwrap();
+        let (statut, _) =
+            requete(&ctx.app, "POST", "/api/auth/logout-all", Some(jeton), None).await;
+        assert_eq!(statut, StatusCode::NO_CONTENT);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id, id]);
+    }
+
+    #[tokio::test]
+    async fn changement_de_role_previent_message_service() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (cible, _) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+        let (statut, _) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{cible}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "admin" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![cible]);
+    }
+
+    #[tokio::test]
+    async fn role_identique_ne_revoque_pas_les_sessions() {
+        let ctx = nouveau_contexte();
+        let (id_admin, _) =
+            inscrire(&ctx.app, "admin1", "admin1@example.com", "motdepasse123").await;
+        let jeton_admin =
+            promouvoir_admin_et_relogin(&ctx, id_admin, "admin1", "motdepasse123").await;
+        let (cible, jeton) = inscrire(&ctx.app, "bob", "bob@example.com", "motdepasse123").await;
+        let (statut, corps) = requete(
+            &ctx.app,
+            "PATCH",
+            &format!("/api/users/{cible}/role"),
+            Some(&jeton_admin),
+            Some(json!({ "role": "utilisateur" })),
+        )
+        .await;
+        assert_eq!(statut, StatusCode::OK);
+        assert_eq!(corps["role"], "utilisateur");
+        assert!(ctx.notificateur.sessions.lock().unwrap().is_empty());
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::OK);
     }
 }

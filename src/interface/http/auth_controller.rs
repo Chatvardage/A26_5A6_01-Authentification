@@ -62,10 +62,17 @@ pub async fn modifier_moi(
     session: UtilisateurAuthentifie,
     Json(requete): Json<ModifierProfilRequest>,
 ) -> Result<ReponseJson<UtilisateurPublic>, AppError> {
+    // Nouveau mot de passe : tous les jetons sont invalidés (version_auth).
+    let mot_de_passe_change = requete.mot_de_passe.is_some();
     let utilisateur = state
         .auth_service
         .modifier_profil(session.id_utilisateur, requete)
         .await?;
+    if mot_de_passe_change {
+        state
+            .notificateur_suppression
+            .sessions_invalidees(session.id_utilisateur);
+    }
     Ok(ReponseJson(utilisateur))
 }
 
@@ -82,12 +89,17 @@ pub async fn supprimer_moi(
     state
         .notificateur_suppression
         .compte_supprime(session.id_utilisateur);
+    // Ses autres appareils encore connectés sont déconnectés aussitôt.
+    state
+        .notificateur_suppression
+        .sessions_invalidees(session.id_utilisateur);
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// POST /api/auth/logout-all — invalide tous les jetons de l'utilisateur,
-/// sur tous ses appareils (celui de la requête compris). Les autres
-/// services le constatent au plus tard après leur cache de validation
+/// sur tous ses appareils (celui de la requête compris). Message-Service en
+/// est prévenu et ferme aussitôt les sockets ; les autres services le
+/// constatent au plus tard après leur cache de validation
 /// (`AUTH_CACHE_TTL_MS`).
 pub async fn deconnexion_partout(
     State(state): State<AppState>,
@@ -99,9 +111,29 @@ pub async fn deconnexion_partout(
         .await
         .map_err(|e| AppError::Interne(e.to_string()))?;
     if invalide {
+        state
+            .notificateur_suppression
+            .sessions_invalidees(session.id_utilisateur);
         Ok(StatusCode::NO_CONTENT)
     } else {
         // Supprimé entre la validation du jeton et cet appel.
         Err(AppError::NonAutorise("jeton invalide ou expiré".into()))
     }
+}
+
+/// POST /api/auth/logout-others — déconnecte tous les AUTRES appareils :
+/// tous les jetons sont invalidés, puis une nouvelle session (jeton et
+/// refresh token) est renvoyée à l'appareil qui le demande.
+pub async fn deconnexion_autres(
+    State(state): State<AppState>,
+    session: UtilisateurAuthentifie,
+) -> Result<ReponseJson<AuthResponse>, AppError> {
+    let reponse = state
+        .auth_service
+        .deconnecter_autres(
+            session.id_utilisateur,
+            state.notificateur_suppression.as_ref(),
+        )
+        .await?;
+    Ok(ReponseJson(reponse))
 }

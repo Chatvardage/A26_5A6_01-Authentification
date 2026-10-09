@@ -58,8 +58,27 @@ d'accès durent 15 minutes; les refresh tokens opaques sont hachés (SHA-256) da
 PostgreSQL. `POST /api/auth/refresh` consomme et remplace atomiquement un refresh
 token. La famille expire après 30 jours, sans prolongation par rotation.
 `POST /api/auth/logout` révoque la famille à partir d'un token courant ou consommé.
+`POST /api/auth/logout-all` invalide toutes les sessions du compte (tous les appareils) ;
+`POST /api/auth/logout-others` fait de même puis renvoie une nouvelle session
+(`jeton`, `refresh_token`, `utilisateur`) à l'appareil qui le demande. Après un
+changement de mot de passe, une déconnexion (tous ou autres appareils) ou un
+changement réel de rôle, Authentification prévient les services de
+`SERVICES_SESSIONS_REVOQUEES_URLS` (Message-Service ferme aussitôt les sockets
+dont le jeton est révoqué).
 Les deux routes utilisent `{ "refresh_token": "<opaque>" }` sans Bearer et passent
 par le Gateway. Logout-all et changement de mot de passe invalident aussi les
 refresh tokens via `version_auth`. Aucun changement Compose ni nouveau secret
 n'est nécessaire : appliquer la nouvelle migration Prisma au démarrage.
 Voir le [contrat central](../A26_5A6_01-Infra/docs/api/authentification.md#sessions-renouvelables--register-login-refresh-et-logout).
+
+## Renforcement sécurité — 9 octobre 2026
+
+Les calculs Argon2 partagent un sémaphore de quatre places (environ 76 Mio pour les calculs simultanés). Une attente supérieure à cinq secondes renvoie HTTP 503. Le permis reste détenu par la tâche CPU même si le client se déconnecte. La limitation par IP du Gateway reste nécessaire.
+
+L'image finale compile Rust avec musl, utilise Node 22 Alpine et applique les mises à jour système disponibles et retire npm/npx après installation. Les migrations restent exécutées avant le serveur, via `./node_modules/.bin/prisma migrate deploy`, sans téléchargement au démarrage.
+
+### Limites connues
+
+L'audit Cargo sans exclusion signale `RUSTSEC-2023-0071` (`rsa`, dépendance SQLx/MySQL présente dans le lockfile). La configuration d'audit existante exclut cet avis : `cargo tree -e normal` confirme que `rsa` n'est pas compilée dans ce service PostgreSQL. Revoir cette exclusion si MySQL ou RSA est activé. Les alertes système résiduelles et les exigences de déploiement sont consignées dans [rapport initial Infra](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/audit-securite-2026-10-09.md).
+
+Pour logout-others, la notification de révocation suit immédiatement l’invalidation validée, même si la relecture ou l’ouverture de la nouvelle session échoue ensuite. Une telle erreur ne restaure pas les anciennes sessions.

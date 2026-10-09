@@ -147,12 +147,20 @@ pub trait UtilisateurRepositoryPort: Send + Sync {
 /// qu'ils effacent les données qui le concernent (serveurs possédés,
 /// messages, configuration). « Tire et oublie » : la suppression du compte
 /// ne dépend jamais de leur disponibilité.
+///
+/// `sessions_invalidees` : tous les jetons du compte viennent d'être
+/// invalidés (mot de passe changé, déconnexion de tous ou des autres
+/// appareils). Message-Service ferme aussitôt les sockets temps réel dont le
+/// jeton ne vaut plus rien : les autres appareils sont déconnectés sans
+/// attendre sa revérification périodique.
 pub trait NotificateurSuppressionPort: Send + Sync {
     fn compte_supprime(&self, id: Uuid);
+    fn sessions_invalidees(&self, id: Uuid);
 }
 
 pub enum ResultatChangementRole {
-    Modifie(Utilisateur),
+    Modifie(crate::domain::utilisateur::UtilisateurPublic),
+    Inchange(crate::domain::utilisateur::UtilisateurPublic),
     CibleAdmin,
     Introuvable,
 }

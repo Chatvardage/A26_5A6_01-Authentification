@@ -61,6 +61,7 @@ async fn main() {
         jwt_service,
         notificateur_suppression: Arc::new(HttpNotificateurSuppression::new(
             config.services_compte_supprime.clone(),
+            config.services_sessions_revoquees.clone(),
             config.jeton_interne.clone(),
         )),
     };

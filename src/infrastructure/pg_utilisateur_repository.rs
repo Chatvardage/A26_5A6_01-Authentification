@@ -12,7 +12,31 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::domain::ports::{RepoError, ResultatChangementRole, UtilisateurRepositoryPort};
-use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic};
+use crate::domain::utilisateur::{Role, Utilisateur, UtilisateurLookupPublic, UtilisateurPublic};
+
+/// Le changement de rôle ne charge jamais le hash ni les données de session.
+#[derive(sqlx::FromRow)]
+struct ProfilChangementRole {
+    id: Uuid,
+    pseudo: String,
+    courriel: String,
+    role: String,
+    cree_le: chrono::DateTime<chrono::Utc>,
+    modifie_le: chrono::DateTime<chrono::Utc>,
+}
+
+impl From<ProfilChangementRole> for UtilisateurPublic {
+    fn from(profil: ProfilChangementRole) -> Self {
+        Self {
+            id: profil.id,
+            pseudo: profil.pseudo,
+            courriel: profil.courriel,
+            role: Role::from_str(&profil.role),
+            cree_le: profil.cree_le,
+            modifie_le: profil.modifie_le,
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PgUtilisateurRepository {
@@ -333,26 +357,29 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         role: Role,
     ) -> Result<ResultatChangementRole, RepoError> {
         let mut transaction = self.pool.begin().await.map_err(mapper_erreur_sql)?;
-        let role_actuel: Option<(String,)> =
-            sqlx::query_as("SELECT role FROM utilisateurs WHERE id = $1 FOR UPDATE")
+        let actuel: Option<ProfilChangementRole> =
+            sqlx::query_as("SELECT id, pseudo, courriel, role, cree_le, modifie_le FROM utilisateurs WHERE id = $1 FOR UPDATE")
                 .bind(id)
                 .fetch_optional(&mut *transaction)
                 .await
                 .map_err(mapper_erreur_sql)?;
 
-        let Some((role_actuel,)) = role_actuel else {
+        let Some(actuel) = actuel else {
             return Ok(ResultatChangementRole::Introuvable);
         };
-        if role_actuel == Role::Admin.as_str() {
+        if actuel.role == Role::Admin.as_str() {
             return Ok(ResultatChangementRole::CibleAdmin);
         }
+        if actuel.role == role.as_str() {
+            return Ok(ResultatChangementRole::Inchange(actuel.into()));
+        }
 
-        let utilisateur = sqlx::query_as::<_, Utilisateur>(
+        let utilisateur = sqlx::query_as::<_, ProfilChangementRole>(
             r#"
             UPDATE utilisateurs
             SET role = $2, version_auth = version_auth + 1, modifie_le = now()
             WHERE id = $1
-            RETURNING id, pseudo, courriel, mot_de_passe_hache, version_auth, role, cree_le, modifie_le
+            RETURNING id, pseudo, courriel, role, cree_le, modifie_le
             "#,
         )
         .bind(id)
@@ -361,7 +388,7 @@ impl UtilisateurRepositoryPort for PgUtilisateurRepository {
         .await
         .map_err(mapper_erreur_sql)?;
         transaction.commit().await.map_err(mapper_erreur_sql)?;
-        Ok(ResultatChangementRole::Modifie(utilisateur))
+        Ok(ResultatChangementRole::Modifie(utilisateur.into()))
     }
 
     async fn verifier_sante(&self) -> Result<(), RepoError> {
@@ -900,7 +927,7 @@ mod tests {
         let ResultatChangementRole::Modifie(modifie) = resultat else {
             panic!("le compte non-admin doit pouvoir être promu");
         };
-        assert_eq!(modifie.role, "admin");
+        assert_eq!(modifie.role, Role::Admin);
 
         assert!(matches!(
             repo.changer_role_si_non_admin(cree.id, Role::Utilisateur)
@@ -921,6 +948,28 @@ mod tests {
                 .unwrap(),
             ResultatChangementRole::Introuvable
         ));
+    }
+
+    #[tokio::test]
+    async fn role_identique_preserve_la_version_et_la_date() {
+        let repo = PgUtilisateurRepository::new(pool_de_test().await);
+        let pseudo = identifiant_unique("roleinchange");
+        let cree = repo
+            .creer(&pseudo, &format!("{pseudo}@example.com"), "hash")
+            .await
+            .unwrap();
+        let resultat = repo
+            .changer_role_si_non_admin(cree.id, Role::Utilisateur)
+            .await
+            .unwrap();
+        let ResultatChangementRole::Inchange(inchange) = resultat else {
+            panic!("un rôle identique ne doit pas invalider les sessions");
+        };
+        assert_eq!(inchange.modifie_le, cree.modifie_le);
+        let relu = repo.trouver_par_id(cree.id).await.unwrap().unwrap();
+        assert_eq!(relu.version_auth, cree.version_auth);
+        assert_eq!(relu.modifie_le, cree.modifie_le);
+        repo.supprimer(cree.id).await.unwrap();
     }
 
     #[tokio::test]

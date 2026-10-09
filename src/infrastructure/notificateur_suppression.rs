@@ -1,5 +1,7 @@
 //! Prévient les autres microservices qu'un compte a été supprimé
-//! (`DELETE {url}/api/internal/users/{id}`, en-tête `x-internal-token`).
+//! (`DELETE {url}/api/internal/users/{id}`, en-tête `x-internal-token`), ou
+//! que toutes ses sessions viennent d'être invalidées
+//! (`POST {url}/api/internal/users/{id}/sessions-revoquees`).
 //! Sans ça, ses serveurs restaient sans propriétaire, ses messages et sa
 //! configuration (alias, avatar) restaient en base pour toujours.
 //!
@@ -19,9 +21,37 @@ const DELAI_APPEL: Duration = Duration::from_secs(5);
 /// Attentes avant chaque nouvelle tentative (donc 3 essais au total).
 const ATTENTES_ENTRE_TENTATIVES: [Duration; 2] = [Duration::from_secs(1), Duration::from_secs(4)];
 
+/// Ce dont on prévient les services : route appelée et texte des journaux.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Appel {
+    CompteSupprime,
+    SessionsInvalidees,
+}
+
+impl Appel {
+    fn requete(self, client: &reqwest::Client, base: &str, id: Uuid) -> reqwest::RequestBuilder {
+        match self {
+            Appel::CompteSupprime => client.delete(format!("{base}/api/internal/users/{id}")),
+            Appel::SessionsInvalidees => {
+                client.post(format!("{base}/api/internal/users/{id}/sessions-revoquees"))
+            }
+        }
+    }
+
+    fn motif(self) -> &'static str {
+        match self {
+            Appel::CompteSupprime => "compte supprimé",
+            Appel::SessionsInvalidees => "sessions invalidées",
+        }
+    }
+}
+
 pub struct HttpNotificateurSuppression {
     client: reqwest::Client,
     urls: Arc<Vec<String>>,
+    /// Services à prévenir quand les sessions d'un compte sont invalidées
+    /// (`SERVICES_SESSIONS_REVOQUEES_URLS`, en pratique Message-Service).
+    urls_sessions: Arc<Vec<String>>,
     jeton_interne: Option<String>,
     attentes: &'static [Duration],
 }
@@ -30,26 +60,40 @@ impl HttpNotificateurSuppression {
     /// `urls` : URL de base de chaque service à prévenir (sans `/` final
     /// obligatoire). Sans URL ou sans jeton interne, rien n'est envoyé (un
     /// avertissement est journalisé à chaque suppression).
-    pub fn new(urls: Vec<String>, jeton_interne: Option<String>) -> Self {
-        Self::avec_attentes(urls, jeton_interne, &ATTENTES_ENTRE_TENTATIVES)
+    pub fn new(
+        urls: Vec<String>,
+        urls_sessions: Vec<String>,
+        jeton_interne: Option<String>,
+    ) -> Self {
+        Self::avec_attentes(
+            urls,
+            urls_sessions,
+            jeton_interne,
+            &ATTENTES_ENTRE_TENTATIVES,
+        )
     }
 
     fn avec_attentes(
         urls: Vec<String>,
+        urls_sessions: Vec<String>,
         jeton_interne: Option<String>,
         attentes: &'static [Duration],
     ) -> Self {
+        let normaliser = |urls: Vec<String>| {
+            Arc::new(
+                urls.into_iter()
+                    .map(|url| url.trim_end_matches('/').to_string())
+                    .collect::<Vec<_>>(),
+            )
+        };
         let client = reqwest::Client::builder()
             .timeout(DELAI_APPEL)
             .build()
             .expect("impossible de créer le client HTTP");
         Self {
             client,
-            urls: Arc::new(
-                urls.into_iter()
-                    .map(|url| url.trim_end_matches('/').to_string())
-                    .collect(),
-            ),
+            urls: normaliser(urls),
+            urls_sessions: normaliser(urls_sessions),
             jeton_interne,
             attentes,
         }
@@ -58,21 +102,23 @@ impl HttpNotificateurSuppression {
     /// Appelle chaque service ; renvoie ceux qui ont définitivement échoué.
     async fn prevenir(
         client: reqwest::Client,
+        appel: Appel,
         urls: Arc<Vec<String>>,
         jeton: String,
         id: Uuid,
         attentes: &'static [Duration],
     ) -> Vec<String> {
         let mut echecs = Vec::new();
+        let motif = appel.motif();
         for base in urls.iter() {
-            let url = format!("{base}/api/internal/users/{id}");
+            let url = base.clone();
             let mut reussi = false;
             for tentative in 0..=attentes.len() {
                 if tentative > 0 {
                     tokio::time::sleep(attentes[tentative - 1]).await;
                 }
-                match client
-                    .delete(&url)
+                match appel
+                    .requete(&client, base, id)
                     .header("x-internal-token", &jeton)
                     .send()
                     .await
@@ -82,19 +128,19 @@ impl HttpNotificateurSuppression {
                         break;
                     }
                     Ok(reponse) => tracing::warn!(
-                        %url, statut = %reponse.status(), tentative,
-                        "compte supprimé : service refusant la notification"
+                        %url, %id, statut = %reponse.status(), tentative,
+                        "{motif} : service refusant la notification"
                     ),
                     Err(erreur) => tracing::warn!(
-                        %url, %erreur, tentative,
-                        "compte supprimé : service injoignable"
+                        %url, %id, %erreur, tentative,
+                        "{motif} : service injoignable"
                     ),
                 }
             }
             if !reussi {
                 tracing::error!(
-                    %url,
-                    "compte supprimé : service non prévenu, ses données restent (rejouer l'appel à la main)"
+                    %url, %id,
+                    "{motif} : service non prévenu (rejouer l'appel à la main)"
                 );
                 echecs.push(base.clone());
             }
@@ -103,23 +149,46 @@ impl HttpNotificateurSuppression {
     }
 }
 
-impl NotificateurSuppressionPort for HttpNotificateurSuppression {
-    fn compte_supprime(&self, id: Uuid) {
-        if self.urls.is_empty() {
-            tracing::warn!(%id, "compte supprimé : SERVICES_COMPTE_SUPPRIME_URLS vide, aucun service prévenu");
+impl HttpNotificateurSuppression {
+    /// Lance l'appel en tâche de fond (sans URL ou sans jeton : journalisé).
+    fn lancer(&self, appel: Appel, urls: &Arc<Vec<String>>, variable: &str, id: Uuid) {
+        let motif = appel.motif();
+        if urls.is_empty() {
+            tracing::warn!(%id, "{motif} : {variable} vide, aucun service prévenu");
             return;
         }
         let Some(jeton) = self.jeton_interne.clone() else {
-            tracing::warn!(%id, "compte supprimé : INTERNAL_SERVICE_TOKEN absent, aucun service prévenu");
+            tracing::warn!(%id, "{motif} : INTERNAL_SERVICE_TOKEN absent, aucun service prévenu");
             return;
         };
         tokio::spawn(Self::prevenir(
             self.client.clone(),
-            self.urls.clone(),
+            appel,
+            urls.clone(),
             jeton,
             id,
             self.attentes,
         ));
+    }
+}
+
+impl NotificateurSuppressionPort for HttpNotificateurSuppression {
+    fn compte_supprime(&self, id: Uuid) {
+        self.lancer(
+            Appel::CompteSupprime,
+            &self.urls,
+            "SERVICES_COMPTE_SUPPRIME_URLS",
+            id,
+        );
+    }
+
+    fn sessions_invalidees(&self, id: Uuid) {
+        self.lancer(
+            Appel::SessionsInvalidees,
+            &self.urls_sessions,
+            "SERVICES_SESSIONS_REVOQUEES_URLS",
+            id,
+        );
     }
 }
 
@@ -128,12 +197,18 @@ impl NotificateurSuppressionPort for HttpNotificateurSuppression {
 #[derive(Default)]
 pub struct NotificateurEnregistreur {
     pub ids: std::sync::Mutex<Vec<Uuid>>,
+    /// Comptes dont les sessions ont été signalées invalidées.
+    pub sessions: std::sync::Mutex<Vec<Uuid>>,
 }
 
 #[cfg(test)]
 impl NotificateurSuppressionPort for NotificateurEnregistreur {
     fn compte_supprime(&self, id: Uuid) {
         self.ids.lock().unwrap().push(id);
+    }
+
+    fn sessions_invalidees(&self, id: Uuid) {
+        self.sessions.lock().unwrap().push(id);
     }
 }
 
@@ -199,6 +274,7 @@ mod tests {
 
         let echecs = HttpNotificateurSuppression::prevenir(
             reqwest::Client::new(),
+            Appel::CompteSupprime,
             Arc::new(vec![
                 url_a.trim_end_matches('/').to_string(),
                 url_b.trim_end_matches('/').to_string(),
@@ -227,6 +303,7 @@ mod tests {
 
         let echecs = HttpNotificateurSuppression::prevenir(
             reqwest::Client::new(),
+            Appel::CompteSupprime,
             Arc::new(vec![
                 url_ok.trim_end_matches('/').to_string(),
                 url_ko.clone(),
@@ -254,6 +331,7 @@ mod tests {
         let (url_ok, recu_ok) = service_factice(0).await;
         let echecs = HttpNotificateurSuppression::prevenir(
             reqwest::Client::new(),
+            Appel::CompteSupprime,
             Arc::new(vec![
                 "http://127.0.0.1:1".to_string(),
                 url_ok.trim_end_matches('/').to_string(),
@@ -272,6 +350,7 @@ mod tests {
         let (url, recu) = service_factice(0).await;
         let notificateur = HttpNotificateurSuppression::avec_attentes(
             vec![url],
+            vec![],
             Some("secret".into()),
             &SANS_ATTENTE,
         );
@@ -289,10 +368,56 @@ mod tests {
     #[tokio::test]
     async fn sans_url_ou_sans_jeton_rien_n_est_envoye() {
         let (url, recu) = service_factice(0).await;
-        HttpNotificateurSuppression::new(vec![url], None).compte_supprime(Uuid::new_v4());
-        HttpNotificateurSuppression::new(vec![], Some("secret".into()))
+        HttpNotificateurSuppression::new(vec![url.clone()], vec![url], None)
             .compte_supprime(Uuid::new_v4());
+        HttpNotificateurSuppression::new(vec![], vec![], Some("secret".into()))
+            .compte_supprime(Uuid::new_v4());
+        HttpNotificateurSuppression::new(vec![], vec![], Some("secret".into()))
+            .sessions_invalidees(Uuid::new_v4());
         tokio::time::sleep(Duration::from_millis(50)).await;
         assert!(recu.appels.lock().unwrap().is_empty());
+    }
+
+    async fn route_sessions(
+        State(recu): State<Recu>,
+        Path(id): Path<String>,
+        entetes: HeaderMap,
+    ) -> StatusCode {
+        route(State(recu), Path(format!("sessions:{id}")), entetes).await
+    }
+
+    #[tokio::test]
+    async fn sessions_invalidees_appelle_la_route_dediee_en_tache_de_fond() {
+        let _ = tracing_subscriber::fmt::try_init();
+        let recu = Recu::default();
+        let app = Router::new()
+            .route(
+                "/api/internal/users/:id/sessions-revoquees",
+                axum::routing::post(route_sessions),
+            )
+            .with_state(recu.clone());
+        let ecoute = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let adresse = ecoute.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(ecoute, app).await.unwrap() });
+
+        // Seule la liste des sessions est prévenue (pas celle des suppressions).
+        let notificateur = HttpNotificateurSuppression::avec_attentes(
+            vec![],
+            vec![format!("http://{adresse}/")],
+            Some("secret".into()),
+            &SANS_ATTENTE,
+        );
+        let id = Uuid::new_v4();
+        notificateur.sessions_invalidees(id);
+        for _ in 0..100 {
+            if !recu.appels.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert_eq!(
+            *recu.appels.lock().unwrap(),
+            vec![(format!("sessions:{id}"), Some("secret".to_string()))]
+        );
     }
 }

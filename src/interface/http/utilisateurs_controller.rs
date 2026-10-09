@@ -231,6 +231,7 @@ pub async fn supprimer(
     if supprime {
         tracing::info!(admin = %session.pseudo, cible = %id, "compte supprimé par un administrateur");
         state.notificateur_suppression.compte_supprime(id);
+        state.notificateur_suppression.sessions_invalidees(id);
         Ok(StatusCode::NO_CONTENT)
     } else {
         Err(AppError::Introuvable("utilisateur introuvable".into()))
@@ -254,6 +255,9 @@ pub async fn changer_role(
         .map_err(|e| AppError::Interne(e.to_string()))?
     {
         ResultatChangementRole::Modifie(utilisateur) => utilisateur,
+        ResultatChangementRole::Inchange(utilisateur) => {
+            return Ok(ReponseJson(utilisateur));
+        }
         ResultatChangementRole::CibleAdmin => {
             return Err(AppError::Interdit(
                 "le rôle d'un administrateur ne peut pas être modifié".into(),
@@ -264,7 +268,9 @@ pub async fn changer_role(
         }
     };
 
-    let utilisateur = UtilisateurPublic::from(utilisateur);
+    // Le changement de rôle invalide ses jetons (version_auth) : ses
+    // appareils se reconnectent avec le nouveau rôle.
+    state.notificateur_suppression.sessions_invalidees(id);
     let nouveau_role = utilisateur.role.as_str();
     tracing::info!(
         admin = %session.pseudo,

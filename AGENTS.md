@@ -72,10 +72,10 @@ npx prisma migrate dev --name <nom_de_la_migration>
 
 Ne jamais modifier une migration déjà appliquée pour masquer un changement. Créer une nouvelle migration.
 
-Dans Docker/déploiement, utiliser :
+Dans l'image Docker finale (sans npm/npx), utiliser :
 
 ```bash
-npx prisma migrate deploy
+./node_modules/.bin/prisma migrate deploy
 ```
 
 Le code Rust (`src/infrastructure/pg_utilisateur_repository.rs`) continue d'utiliser SQLx pour lire/écrire dans PostgreSQL — Prisma n'est jamais appelé comme client au runtime. Toute modification du schéma Prisma doit être répercutée dans ce fichier (et vice-versa), Prisma ne générant pas de code Rust.
@@ -164,18 +164,39 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 
 ## Docker
 
-Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `npx prisma migrate deploy` **au démarrage du conteneur**, puis démarre l'application. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
+Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `./node_modules/.bin/prisma migrate deploy` **au démarrage du conteneur**, puis démarre l'application. npm/npx sont retirés de l'image finale; ils restent disponibles au build et en développement. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
 
 ### Séquence attendue du Dockerfile
 
 Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
 
-1. **`builder`** (`rust:1.88.0-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
-2. **`node-deps`** (`node:22-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
-3. **Image finale** (`node:22-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
-4. **`CMD`** : `npx prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
+1. **`builder`** (`rust:1.88.0-alpine`) : compile le binaire Rust (`cargo build --release`).
+2. **`node-deps`** (`node:22-alpine`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:22-alpine`, avec mises à jour Alpine) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage, sans npm/npx ni curl. Le healthcheck utilise `fetch` de Node; le runtime tourne sous `node`.
+4. **`CMD`** : `./node_modules/.bin/prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
 
 Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.
+
+### Revue PR #10 — 9 octobre 2026
+
+- Documentation Docker corrigée pour refléter l'image et la commande réellement validées.
+- Retour à Bookworm non retenu : [Trixie est Debian stable depuis le 9 août 2025](https://www.debian.org/releases/trixie/), pas la branche testing. Les mises à jour et limites des images sont consignées dans le rapport Infra.
+- Notifications de suppression et de révocation conservées : le DELETE nettoie les données; le POST publie sur Redis sans rechercher un compte en base, puis les sockets sont revalidés auprès d'Auth. Il n'échoue donc pas en 404 après suppression. La notification séparée conserve aussi la révocation si le nettoyage échoue.
+- URL de base dans les logs conservée : l'identifiant et le type d'appel sont déjà présents; reconstruire une deuxième fois le chemin uniquement pour le journal ajouterait une duplication sans corriger le transport.
+- L'erreur de sémaphore fermé reste une branche défensive de `acquire_owned`, testée sur une instance locale fermée. Le sémaphore global n'est actuellement jamais fermé en production; aucun faux mécanisme de fermeture n'est ajouté pour la couverture.
+
+Validation de cette review : changement documentaire uniquement; fmt, clippy, build release, audit npm, migrations sur une nouvelle base jetable, tests Rust et couverture 99,77 % des lignes hors main passent. Aucun changement d'image ou de logique applicative.
+
+### Nouvelle revue PR #10 — changement de rôle identique
+
+- Un rôle identique est reconnu sous le verrou PostgreSQL : réponse 200 avec le profil actuel, sans changer `version_auth` ni `modifie_le`, sans notification de révocation. Une promotion réelle conserve son invalidation; une cible déjà admin reste interdite. Tests PostgreSQL et HTTP couvrent la conservation du jeton.
+- Suppression du journal AGENTS non retenue : l'utilisateur exige ici les raisons des suggestions écartées dans ce même commit.
+- Compromis sécurité/reproductibilité des mises à jour système explicité dans le Dockerfile; aucune modification de ses commandes.
+- Permis Argon2 conservé jusqu'à la fin du calcul : le rendre à l'abandon du client permettrait de dépasser la limite CPU. Saturation bornée et contrôle de débit Gateway existent; ajouter un système d'alertes dépasse ce correctif sans besoin opérationnel concret.
+- Listes de notification distinctes conservées : suppression de données et révocation des sessions sont deux contrats différents. Un service de nettoyage n'a pas forcément de sessions à révoquer; Message-Service reçoit les deux dans Compose.
+- URL de base conservée dans les logs : identifiant et type d'appel déjà présents, aucune ambiguïté de transport démontrée. Pas de duplication uniquement pour le journal.
+
+Validation : fmt, clippy, build release et audit high passent; 184 tests Rust sur PostgreSQL migré et couverture des lignes 99,75 % hors main. Le test existant de rôle identique attend désormais uniquement la notification de suppression. Documentation centrale mise à jour dans une branche Infra distincte liée à cette review.
 
 ### Test en solo (ce dépôt seul)
 
@@ -259,3 +280,20 @@ Dans la description de PR, résumer les changements, indiquer les tests exécut�
 ## Documentation centrale
 
 Infra est la référence du démarrage complet, des architectures, contrats et scénarios de validation. Le README local décrit le dépôt et ses commandes; les guides détaillés sont dans `A26_5A6_01-Infra/docs/`. Toute modification de contrat doit mettre à jour la référence centrale et ses liens.
+
+### Reprise sécurité — review 6078856455
+
+- La lecture verrouillée du changement de rôle et son résultat utilisent uniquement le profil public; aucun hash ni version de session n’est chargé pour ce chemin. Appel est privé à son module.
+- L’image utilise un binaire musl et Node 22 Alpine mis à jour, avec CLI Prisma local stable et utilisateur non privilégié; le CI construit aussi cette image avec --pull.
+- Le sémaphore Argon2 reste limité à quatre places : il attend jusqu’à cinq secondes et les tests réels passent avec cette limite. Augmenter artificiellement sa capacité en test masquerait la protection mémoire/CPU.
+- L’historique AGENTS reste présent conformément à la consigne explicite utilisateur sur les reviews mixtes.
+- Le POST sessions_invalidees après suppression reste utile et fonctionne sans compte en base : il révoque les sockets même si le nettoyage DELETE échoue; le contrat central documente déjà ce cas.
+- Un argument hebdomadaire artificiel de cache n’est pas ajouté : --pull et apk upgrade s’appliquent aux reconstructions; le déploiement doit effectivement reconstruire les images pour recevoir les mises à jour.
+
+### Review 6084480286 — notification après invalidation
+
+- La notification logout-others part dès la mutation réussie, avant toute relecture/création de session; une erreur ultérieure ne laisse plus les sockets attendre leur contrôle périodique. Le test vérifie HTTP 500, notification unique et refus de l’ancien JWT.
+- Le CLI Prisma est vérifié sous node. --chmod=755 récursif n’est pas ajouté : il rendrait inutilement exécutables les fichiers de données; les droits effectifs sont validés au build et au démarrage.
+- Historique AGENTS maintenu à la demande utilisateur; actualisation Alpine volontaire avec digest de l’image de diffusion à conserver; sémaphore Argon2 global conservé pour borner les ressources avec limitation de débit au Gateway.
+
+- Le test d’arrêt Tokio isole sa réservation de permis : le quota global saturé par les autres tests laissait une minuterie attachée au runtime détruit. Les mêmes calculs Argon2 réels sont exercés; les fonctions publiques conservent la limite globale de quatre places et l’attente de cinq secondes.

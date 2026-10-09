@@ -130,10 +130,10 @@ pub async fn deconnexion_autres(
 ) -> Result<ReponseJson<AuthResponse>, AppError> {
     let reponse = state
         .auth_service
-        .deconnecter_autres(session.id_utilisateur)
+        .deconnecter_autres(
+            session.id_utilisateur,
+            state.notificateur_suppression.as_ref(),
+        )
         .await?;
-    state
-        .notificateur_suppression
-        .sessions_invalidees(session.id_utilisateur);
     Ok(ReponseJson(reponse))
 }

@@ -2796,6 +2796,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deconnexion_des_autres_notifie_si_la_relecture_echoue_apres_invalidation() {
+        let ctx = nouveau_contexte();
+        let (id, jeton) = inscrire(&ctx.app, "alice", "alice@example.com", "motdepasse123").await;
+        // Les deux lectures Auth et l’invalidation réussissent; la relecture échoue.
+        ctx.depot_concret.provoquer_erreur_interne_apres(3);
+        let (statut, _) = requete(
+            &ctx.app,
+            "POST",
+            "/api/auth/logout-others",
+            Some(&jeton),
+            None,
+        )
+        .await;
+        assert_eq!(statut, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
+        ctx.depot_concret.provoquer_erreur_interne(false);
+        let (statut, _) = requete(&ctx.app, "GET", "/api/auth/me", Some(&jeton), None).await;
+        assert_eq!(statut, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
     async fn deconnexion_des_autres_d_un_compte_supprime_entre_temps() {
         use super::auth_controller::deconnexion_autres;
         use crate::interface::http::middleware::UtilisateurAuthentifie;

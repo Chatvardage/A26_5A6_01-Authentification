@@ -82,9 +82,8 @@ COPY prisma ./prisma
 # par node : le service n'a pas à réécrire son application au runtime.
 # Les migrations utilisent le CLI local : aucun gestionnaire npm au runtime.
 RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
-RUN test -x node_modules/.bin/prisma
-
 USER node
+RUN test -x node_modules/.bin/prisma
 
 EXPOSE 3001
 

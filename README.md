@@ -80,3 +80,5 @@ L'image finale compile Rust avec musl, utilise Node 22 Alpine et applique les mi
 ### Limites connues
 
 L'audit Cargo sans exclusion signale `RUSTSEC-2023-0071` (`rsa`, dépendance SQLx/MySQL présente dans le lockfile). La configuration d'audit existante exclut cet avis : `cargo tree -e normal` confirme que `rsa` n'est pas compilée dans ce service PostgreSQL. Revoir cette exclusion si MySQL ou RSA est activé. Les alertes système résiduelles et les exigences de déploiement sont consignées dans [rapport initial Infra](https://github.com/Chatvardage/A26_5A6_01-Infra/blob/develop/docs/audit-securite-2026-10-09.md).
+
+Pour logout-others, la notification de révocation suit immédiatement l’invalidation validée, même si la relecture ou l’ouverture de la nouvelle session échoue ensuite. Une telle erreur ne restaure pas les anciennes sessions.

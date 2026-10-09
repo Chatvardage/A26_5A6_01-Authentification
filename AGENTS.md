@@ -289,3 +289,11 @@ Infra est la référence du démarrage complet, des architectures, contrats et s
 - L’historique AGENTS reste présent conformément à la consigne explicite utilisateur sur les reviews mixtes.
 - Le POST sessions_invalidees après suppression reste utile et fonctionne sans compte en base : il révoque les sockets même si le nettoyage DELETE échoue; le contrat central documente déjà ce cas.
 - Un argument hebdomadaire artificiel de cache n’est pas ajouté : --pull et apk upgrade s’appliquent aux reconstructions; le déploiement doit effectivement reconstruire les images pour recevoir les mises à jour.
+
+### Review 6084480286 — notification après invalidation
+
+- La notification logout-others part dès la mutation réussie, avant toute relecture/création de session; une erreur ultérieure ne laisse plus les sockets attendre leur contrôle périodique. Le test vérifie HTTP 500, notification unique et refus de l’ancien JWT.
+- Le CLI Prisma est vérifié sous node. --chmod=755 récursif n’est pas ajouté : il rendrait inutilement exécutables les fichiers de données; les droits effectifs sont validés au build et au démarrage.
+- Historique AGENTS maintenu à la demande utilisateur; actualisation Alpine volontaire avec digest de l’image de diffusion à conserver; sémaphore Argon2 global conservé pour borner les ressources avec limitation de débit au Gateway.
+
+- Le test d’arrêt Tokio isole sa réservation de permis : le quota global saturé par les autres tests laissait une minuterie attachée au runtime détruit. Les mêmes calculs Argon2 réels sont exercés; les fonctions publiques conservent la limite globale de quatre places et l’attente de cinq secondes.

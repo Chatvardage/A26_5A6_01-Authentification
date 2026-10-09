@@ -4,7 +4,7 @@
 //! "minces" : ils décodent le JSON, appellent ce service, et formatent
 //! la réponse.
 //!
-//! `AuthService` ne dépend que du port `UtilisateurRepositoryPort` (voir
+//! `AuthService` utilise les ports repository et notification (voir
 //! `domain::ports`), jamais de PostgreSQL directement : `main.rs` lui
 //! injecte `PgUtilisateurRepository`, sans que ce fichier n'ait besoin de
 //! le savoir (les tests injectent leur propre implémentation en mémoire,
@@ -17,7 +17,7 @@ use tokio::sync::OnceCell;
 use uuid::Uuid;
 use validator::Validate;
 
-use crate::domain::ports::{RepoError, UtilisateurRepositoryPort};
+use crate::domain::ports::{NotificateurSuppressionPort, RepoError, UtilisateurRepositoryPort};
 use crate::domain::utilisateur::UtilisateurPublic;
 use crate::error::AppError;
 use crate::infrastructure::jwt::JwtService;
@@ -88,7 +88,11 @@ impl AuthService {
     /// Déconnecte tous les autres appareils : invalide tous les jetons du
     /// compte (`version_auth` + 1, refresh tokens compris), puis ouvre une
     /// nouvelle session pour l'appareil qui le demande.
-    pub async fn deconnecter_autres(&self, id: Uuid) -> Result<AuthResponse, AppError> {
+    pub async fn deconnecter_autres(
+        &self,
+        id: Uuid,
+        notificateur: &dyn NotificateurSuppressionPort,
+    ) -> Result<AuthResponse, AppError> {
         let session_expiree = || AppError::NonAutorise("jeton invalide ou expiré".into());
         if !self
             .depot
@@ -99,6 +103,9 @@ impl AuthService {
             // Supprimé entre la validation du jeton et cet appel.
             return Err(session_expiree());
         }
+        // Signaler la mutation validée même si la relecture ou la création
+        // de la nouvelle session échoue ensuite.
+        notificateur.sessions_invalidees(id);
         let utilisateur = self
             .depot
             .trouver_par_id(id)

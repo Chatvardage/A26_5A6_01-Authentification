@@ -52,7 +52,11 @@ fn argon2() -> Argon2<'static> {
 /// le même mot de passe auront des hashs différents en base, ce qui empêche
 /// une attaque par table précalculée (rainbow table).
 pub async fn hacher_mot_de_passe(clair: &str) -> Result<String, AppError> {
-    let permis = reserver_calcul(CALCULS.clone(), Duration::from_secs(5)).await?;
+    hacher_avec_limite(clair, CALCULS.clone()).await
+}
+
+async fn hacher_avec_limite(clair: &str, limite: Arc<Semaphore>) -> Result<String, AppError> {
+    let permis = reserver_calcul(limite, Duration::from_secs(5)).await?;
     let clair = clair.to_owned();
     task::spawn_blocking(move || {
         let _permis = permis;
@@ -71,7 +75,15 @@ pub async fn hacher_mot_de_passe(clair: &str) -> Result<String, AppError> {
 /// base sans bloquer un worker Tokio. Retourne `false` pour un mot de passe
 /// incorrect ou un hash invalide : ce sont des cas normaux.
 pub async fn verifier_mot_de_passe(clair: &str, hache: &str) -> Result<bool, AppError> {
-    let permis = reserver_calcul(CALCULS.clone(), Duration::from_secs(5)).await?;
+    verifier_avec_limite(clair, hache, CALCULS.clone()).await
+}
+
+async fn verifier_avec_limite(
+    clair: &str,
+    hache: &str,
+    limite: Arc<Semaphore>,
+) -> Result<bool, AppError> {
+    let permis = reserver_calcul(limite, Duration::from_secs(5)).await?;
     let clair = clair.to_owned();
     let hache = hache.to_owned();
     task::spawn_blocking(move || {
@@ -137,8 +149,11 @@ mod tests {
             blocked.recv().unwrap();
         });
         ready.recv_timeout(Duration::from_secs(5)).unwrap();
-        let mut hashing = Box::pin(hacher_mot_de_passe("password-fixture"));
-        let mut checking = Box::pin(verifier_mot_de_passe("password-fixture", "invalid"));
+        // Ce test arrête volontairement son runtime : isoler sa réservation
+        // pour ne pas arrêter une minuterie en attente du quota d’autres tests.
+        let limite = Arc::new(Semaphore::new(2));
+        let mut hashing = Box::pin(hacher_avec_limite("password-fixture", limite.clone()));
+        let mut checking = Box::pin(verifier_avec_limite("password-fixture", "invalid", limite));
         {
             let _entered = runtime.enter();
             let mut context = Context::from_waker(Waker::noop());

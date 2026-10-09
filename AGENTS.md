@@ -72,10 +72,10 @@ npx prisma migrate dev --name <nom_de_la_migration>
 
 Ne jamais modifier une migration déjà appliquée pour masquer un changement. Créer une nouvelle migration.
 
-Dans Docker/déploiement, utiliser :
+Dans l'image Docker finale (sans npm/npx), utiliser :
 
 ```bash
-npx prisma migrate deploy
+node node_modules/prisma/build/index.js migrate deploy
 ```
 
 Le code Rust (`src/infrastructure/pg_utilisateur_repository.rs`) continue d'utiliser SQLx pour lire/écrire dans PostgreSQL — Prisma n'est jamais appelé comme client au runtime. Toute modification du schéma Prisma doit être répercutée dans ce fichier (et vice-versa), Prisma ne générant pas de code Rust.
@@ -164,18 +164,28 @@ Un agent ne doit pas annoncer que le travail est terminé si une de ces vérific
 
 ## Docker
 
-Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `npx prisma migrate deploy` **au démarrage du conteneur**, puis démarre l'application. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
+Ce dépôt suit le guide Docker/Prisma de l'équipe (`infra`) : chaque microservice possède son propre `Dockerfile`, son propre schéma/migrations Prisma, exécute `npx prisma generate` **pendant le build** et `node node_modules/prisma/build/index.js migrate deploy` **au démarrage du conteneur**, puis démarre l'application. npm/npx sont retirés de l'image finale; ils restent disponibles au build et en développement. `infra` ne crée que les bases PostgreSQL et les utilisateurs — jamais les tables métier.
 
 ### Séquence attendue du Dockerfile
 
 Le `Dockerfile` de ce dépôt utilise 3 stages (pas 2) pour profiter du cache Docker : le build Rust et l'installation de la CLI Prisma ne dépendent pas des mêmes fichiers (`src/` vs `package.json`/`prisma/`), les séparer évite de réinstaller les dépendances npm à chaque changement de code Rust, et inversement.
 
 1. **`builder`** (`rust:1.88.0-slim-bookworm`) : compile le binaire Rust (`cargo build --release`).
-2. **`node-deps`** (`node:22-bookworm-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
-3. **Image finale** (`node:22-bookworm-slim`) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage.
-4. **`CMD`** : `npx prisma migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
+2. **`node-deps`** (`node:22-trixie-slim`) : installe la CLI Prisma (`npm ci`, version figée par `package.json`/`package-lock.json`) et exécute `npx prisma generate`.
+3. **Image finale** (`node:22-trixie-slim`, avec mises à jour Debian) : embarque le binaire Rust compilé (copié depuis `builder`) **et** de quoi exécuter le CLI Prisma (`node_modules/`, `prisma/`, copiés depuis `node-deps`) au démarrage, sans npm/npx ni curl. Le healthcheck utilise `fetch` de Node; le runtime tourne sous `node`.
+4. **`CMD`** : `node node_modules/prisma/build/index.js migrate deploy && exec ./chatvardage-auth` (migrer avant de démarrer, jamais l'inverse ; `exec` transmet les signaux au binaire).
 
 Le résultat (migration au démarrage, generate avant) est équivalent au patron à 2 étapes décrit plus haut — c'est une optimisation de cache, pas un écart de comportement.
+
+### Revue PR #10 — 9 octobre 2026
+
+- Documentation Docker corrigée pour refléter l'image et la commande réellement validées.
+- Retour à Bookworm non retenu : [Trixie est Debian stable depuis le 9 août 2025](https://www.debian.org/releases/trixie/), pas la branche testing. Les mises à jour et limites des images sont consignées dans le rapport Infra.
+- Notifications de suppression et de révocation conservées : le DELETE nettoie les données; le POST publie sur Redis sans rechercher un compte en base, puis les sockets sont revalidés auprès d'Auth. Il n'échoue donc pas en 404 après suppression. La notification séparée conserve aussi la révocation si le nettoyage échoue.
+- URL de base dans les logs conservée : l'identifiant et le type d'appel sont déjà présents; reconstruire une deuxième fois le chemin uniquement pour le journal ajouterait une duplication sans corriger le transport.
+- L'erreur de sémaphore fermé reste une branche défensive de `acquire_owned`, testée sur une instance locale fermée. Le sémaphore global n'est actuellement jamais fermé en production; aucun faux mécanisme de fermeture n'est ajouté pour la couverture.
+
+Validation de cette review : changement documentaire uniquement; fmt, clippy, build release, audit npm, migrations sur une nouvelle base jetable, tests Rust et couverture 99,77 % des lignes hors main passent. Aucun changement d'image ou de logique applicative.
 
 ### Test en solo (ce dépôt seul)
 

@@ -264,6 +264,9 @@ pub async fn changer_role(
         }
     };
 
+    // Le changement de rôle invalide ses jetons (version_auth) : ses
+    // appareils se reconnectent avec le nouveau rôle.
+    state.notificateur_suppression.sessions_invalidees(id);
     let utilisateur = UtilisateurPublic::from(utilisateur);
     let nouveau_role = utilisateur.role.as_str();
     tracing::info!(

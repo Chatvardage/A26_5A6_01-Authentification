@@ -85,6 +85,29 @@ impl AuthService {
         })
     }
 
+    /// Déconnecte tous les autres appareils : invalide tous les jetons du
+    /// compte (`version_auth` + 1, refresh tokens compris), puis ouvre une
+    /// nouvelle session pour l'appareil qui le demande.
+    pub async fn deconnecter_autres(&self, id: Uuid) -> Result<AuthResponse, AppError> {
+        let session_expiree = || AppError::NonAutorise("jeton invalide ou expiré".into());
+        if !self
+            .depot
+            .invalider_sessions(id)
+            .await
+            .map_err(mapper_erreur_depot)?
+        {
+            // Supprimé entre la validation du jeton et cet appel.
+            return Err(session_expiree());
+        }
+        let utilisateur = self
+            .depot
+            .trouver_par_id(id)
+            .await
+            .map_err(mapper_erreur_depot)?
+            .ok_or_else(session_expiree)?;
+        self.ouvrir_session(utilisateur).await
+    }
+
     pub async fn deconnecter(&self, requete: super::dto::RefreshRequest) -> Result<(), AppError> {
         valider_refresh(&requete)?;
         self.depot

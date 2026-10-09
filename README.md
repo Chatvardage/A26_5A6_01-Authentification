@@ -58,6 +58,13 @@ d'accès durent 15 minutes; les refresh tokens opaques sont hachés (SHA-256) da
 PostgreSQL. `POST /api/auth/refresh` consomme et remplace atomiquement un refresh
 token. La famille expire après 30 jours, sans prolongation par rotation.
 `POST /api/auth/logout` révoque la famille à partir d'un token courant ou consommé.
+`POST /api/auth/logout-all` invalide toutes les sessions du compte (tous les appareils) ;
+`POST /api/auth/logout-others` fait de même puis renvoie une nouvelle session
+(`jeton`, `refresh_token`, `utilisateur`) à l'appareil qui le demande. Après un
+changement de mot de passe, une déconnexion (tous ou autres appareils) ou un
+changement de rôle, Authentification prévient les services de
+`SERVICES_SESSIONS_REVOQUEES_URLS` (Message-Service ferme aussitôt les sockets
+dont le jeton est révoqué).
 Les deux routes utilisent `{ "refresh_token": "<opaque>" }` sans Bearer et passent
 par le Gateway. Logout-all et changement de mot de passe invalident aussi les
 refresh tokens via `version_auth`. Aucun changement Compose ni nouveau secret

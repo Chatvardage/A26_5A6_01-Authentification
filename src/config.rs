@@ -53,6 +53,10 @@ pub struct Config {
     /// URL de base des services à prévenir d'une suppression de compte
     /// (`SERVICES_COMPTE_SUPPRIME_URLS`, séparées par des virgules).
     pub services_compte_supprime: Vec<String>,
+    /// URL de base des services à prévenir quand toutes les sessions d'un
+    /// compte sont invalidées (`SERVICES_SESSIONS_REVOQUEES_URLS`, séparées
+    /// par des virgules ; en pratique Message-Service, qui ferme les sockets).
+    pub services_sessions_revoquees: Vec<String>,
     /// Secret partagé entre microservices (`INTERNAL_SERVICE_TOKEN`).
     pub jeton_interne: Option<String>,
 }
@@ -90,12 +94,16 @@ impl Config {
             .filter(|url| !url.trim().is_empty())
             .expect("DATABASE_URL doit être définie et non vide (voir .env.example) — PostgreSQL est requis, il n'y a pas de mode mock");
 
-        let services_compte_supprime: Vec<String> = std::env::var("SERVICES_COMPTE_SUPPRIME_URLS")
-            .unwrap_or_default()
-            .split(',')
-            .map(|url| url.trim().to_string())
-            .filter(|url| !url.is_empty())
-            .collect();
+        let lire_urls = |variable: &str| -> Vec<String> {
+            std::env::var(variable)
+                .unwrap_or_default()
+                .split(',')
+                .map(|url| url.trim().to_string())
+                .filter(|url| !url.is_empty())
+                .collect()
+        };
+        let services_compte_supprime = lire_urls("SERVICES_COMPTE_SUPPRIME_URLS");
+        let services_sessions_revoquees = lire_urls("SERVICES_SESSIONS_REVOQUEES_URLS");
         let jeton_interne = std::env::var("INTERNAL_SERVICE_TOKEN")
             .ok()
             .map(|jeton| jeton.trim().to_string())
@@ -103,7 +111,7 @@ impl Config {
 
         if est_production() {
             let mut problemes = problemes_secrets_production(&jwt_secret, &database_url);
-            if !services_compte_supprime.is_empty() {
+            if !services_compte_supprime.is_empty() || !services_sessions_revoquees.is_empty() {
                 problemes.extend(probleme_jeton_interne(jeton_interne.as_deref()));
             }
             assert!(
@@ -125,6 +133,7 @@ impl Config {
                     .collect()
             }),
             services_compte_supprime,
+            services_sessions_revoquees,
             jeton_interne,
         }
     }
@@ -230,6 +239,10 @@ mod tests {
                     "SERVICES_COMPTE_SUPPRIME_URLS",
                     Some(" http://room , , http://messages "),
                 ),
+                (
+                    "SERVICES_SESSIONS_REVOQUEES_URLS",
+                    Some(" http://messages ,"),
+                ),
                 ("INTERNAL_SERVICE_TOKEN", Some(SECRET_VALIDE)),
             ],
             || {
@@ -238,6 +251,7 @@ mod tests {
                     config.services_compte_supprime,
                     ["http://room", "http://messages"]
                 );
+                assert_eq!(config.services_sessions_revoquees, ["http://messages"]);
                 assert_eq!(config.jeton_interne.as_deref(), Some(SECRET_VALIDE));
             },
         );

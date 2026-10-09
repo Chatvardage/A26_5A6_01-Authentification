@@ -1673,6 +1673,7 @@ mod tests {
         assert_eq!(statut, StatusCode::NO_CONTENT);
         // Les autres services sont prévenus, une seule fois.
         assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id]);
+        assert_eq!(*ctx.notificateur.sessions.lock().unwrap(), vec![id]);
 
         let (statut, _) = requete(
             &ctx.app,
@@ -2066,6 +2067,11 @@ mod tests {
         .await;
         assert_eq!(statut, StatusCode::NO_CONTENT);
         assert_eq!(*ctx.notificateur.ids.lock().unwrap(), vec![id_alice]);
+        // Changement de rôle puis suppression : ses sessions, invalidées deux fois.
+        assert_eq!(
+            *ctx.notificateur.sessions.lock().unwrap(),
+            vec![id_alice, id_alice]
+        );
 
         let (statut, _) = requete(
             &ctx.app,

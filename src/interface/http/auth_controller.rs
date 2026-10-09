@@ -89,6 +89,10 @@ pub async fn supprimer_moi(
     state
         .notificateur_suppression
         .compte_supprime(session.id_utilisateur);
+    // Ses autres appareils encore connectés sont déconnectés aussitôt.
+    state
+        .notificateur_suppression
+        .sessions_invalidees(session.id_utilisateur);
     Ok(StatusCode::NO_CONTENT)
 }
 
